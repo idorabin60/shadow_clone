@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    * {
+        scroll-behavior: smooth;
+    }
+    body {
+        @apply antialiased font-heebo bg-slate-950 text-white;
+        direction: rtl;
+    }
+    ::-webkit-scrollbar {
+        width: 8px;
+    }
+    ::-webkit-scrollbar-track {
+        background: #0F172A;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: #3B82F6;
+        border-radius: 4px;
+    }
+}
+
+@layer utilities {
+    .text-gradient {
+        @apply bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-amber-400;
+    }
+    .text-gradient-amber {
+        @apply bg-clip-text text-transparent bg-gradient-to-r from-amber-400 to-amber-600;
+    }
+}

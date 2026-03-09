@@ -1,0 +1,16 @@
+{
+  "components_list": [
+    "App.tsx",
+    "Navbar.tsx",
+    "Hero.tsx",
+    "Footer.tsx"
+  ],
+  "naming_rules": [
+    "Navigation MUST be named Navbar.tsx. Never Navigation.tsx",
+    "Do not overwrite tailwind.config.js unless requested",
+    "Avoid rewriting index.html"
+  ],
+  "entry_file_imports": [
+    "import App from './App.tsx'"
+  ]
+}

@@ -1,0 +1,84 @@
+@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-primary: #0A0A0A;
+    --bg-secondary: #111111;
+    --bg-tertiary: #1A1A1A;
+    --bg-glass: rgba(255,255,255,0.03);
+    --border-subtle: rgba(255,255,255,0.06);
+    --border-gold: rgba(191,155,81,0.3);
+    --text-primary: #F5F0E8;
+    --text-secondary: #8A8578;
+    --text-muted: #5A5650;
+    --accent-gold: #BF9B51;
+    --accent-gold-light: #D4AF61;
+    --accent-bronze: #8B6914;
+    --accent-gold-glow: rgba(191,155,81,0.15);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--accent-bronze) var(--bg-secondary);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply antialiased;
+    font-family: 'Heebo', sans-serif;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+  }
+
+  ::selection {
+    background-color: var(--accent-gold);
+    color: var(--bg-primary);
+  }
+}
+
+@layer utilities {
+  .gold-shimmer {
+    background: linear-gradient(to right, #8B6914, #BF9B51, #D4AF61);
+  }
+
+  .gold-text {
+    background: linear-gradient(to right, #8B6914, #BF9B51, #D4AF61);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .glass-card {
+    background: rgba(255,255,255,0.03);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .glass-card-hover:hover {
+    border-color: rgba(191,155,81,0.3);
+    background: rgba(255,255,255,0.05);
+  }
+
+  .ambient-glow {
+    background: radial-gradient(ellipse at 50% 0%, rgba(191,155,81,0.06) 0%, transparent 70%);
+  }
+
+  .section-mesh {
+    background:
+      radial-gradient(at 20% 80%, rgba(191,155,81,0.03) 0%, transparent 50%),
+      radial-gradient(at 80% 20%, rgba(139,105,20,0.02) 0%, transparent 50%),
+      #0A0A0A;
+  }
+
+  .gold-glow-shadow {
+    box-shadow: 0 0 40px rgba(191,155,81,0.15), 0 0 80px rgba(191,155,81,0.05);
+  }
+}
