@@ -103,6 +103,7 @@ const zod_1 = require("zod");
  */
 async function developerNode(state) {
     console.log(`👨‍💻 [Developer] Starting Coding Session... (Overall QA Iteration ${state.iterationCount})`);
+    // we use this spec?
     const spec = await tools_1.tools.readFile(state.sandboxPath, "spec.md");
     const errorContext = state.errorLogs
         ? `\n\nCRITICAL FIX REQUIRED: QA found errors:\n${state.errorLogs}\n`
@@ -265,7 +266,7 @@ Your task: Output the XML <file> blocks to construct the frontend application ef
             packages: zod_1.z.array(zod_1.z.string()).describe("A list of npm package names to install, e.g., ['framer-motion', 'clsx']"),
         })
     });
-    const agentTools = [writeFileTool, editFileTool, readFileTool, listFilesTool, npmInstallTool];
+    const agentTools = [readFileTool, listFilesTool, npmInstallTool];
     const toolsByName = Object.fromEntries(agentTools.map((t) => [t.name, t]));
     // Bind the tools to the Developer Model (Claude preferred)
     const modelWithTools = devModel.bindTools(agentTools);
@@ -380,9 +381,6 @@ Your task: Output the XML <file> blocks to construct the frontend application ef
                 if (selectedTool) {
                     try {
                         toolResult = await selectedTool.invoke(tCall.args);
-                        if (tCall.name === "write_file" || tCall.name === "edit_file") {
-                            didPatch = true;
-                        }
                     }
                     catch (e) {
                         schemaErrorOccurred = true;
