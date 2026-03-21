@@ -1,10 +1,15 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import proxy from "express-http-proxy";
-import { spawn, ChildProcess } from "child_process";
+
+// ‼️ Fix for ts-node loading LangChain core modules which expect Web Streams to be globally available
+if (typeof global.ReadableStream === 'undefined') {
+    global.ReadableStream = require('node:stream/web').ReadableStream;
+}
+
 import { SandboxManager } from "./sandbox/SandboxManager";
 import { orchestratorApp } from "./orchestrator/graph";
+import { supabase } from "./db/supabase";
 
 dotenv.config();
 
@@ -18,10 +23,6 @@ const sandboxManager = new SandboxManager();
 
 // Store active streams by uuid to push logs easily
 const clients: { [key: string]: express.Response } = {};
-
-// Store active Vite Servers by uuid
-const activeServers: { [uuid: string]: { port: number, process: ChildProcess } } = {};
-let availablePort = 5174; // Vite defaults to 5173, start from 5174 for dynamic alloc
 
 /**
  * Helper to emit SSE messages
@@ -44,6 +45,7 @@ app.get("/health", (req, res) => {
  */
 app.post("/api/orchestrate", async (req, res) => {
     const businessInput = req.body;
+    const { projectId } = req.body;
 
     if (!businessInput || !businessInput.businessName) {
         return res.status(400).json({ error: "Missing businessInput" });
@@ -51,7 +53,7 @@ app.post("/api/orchestrate", async (req, res) => {
 
     try {
         // 1. Create a Sandbox
-        const { sandboxId, sandboxPath } = await sandboxManager.createSandbox();
+        const { sandboxId, sandboxPath } = await sandboxManager.createSandbox(projectId);
 
         // 2. Return the UUID to the client immediately so they can subscribe to SSE
         res.json({ sandboxId, message: "Orchestration started" });
@@ -81,29 +83,30 @@ app.post("/api/orchestrate", async (req, res) => {
                     iterationCount: 0
                 });
 
-                sendLog(sandboxId, "✅ Generation Complete! Starting Live Server...");
+                sendLog(sandboxId, "✅ Generation Complete! Saving files to database...");
 
-                // Phase 5: Live Dev Server Orchestration
-                const port = availablePort++;
-                const viteProcess = spawn("npm", ["run", "dev", "--", "--port", port.toString(), "--strictPort", "--host", "--base", `/serve/${sandboxId}/`], {
-                    cwd: sandboxPath,
-                    shell: true
-                });
+                // Phase 5: Extract Sandbox Files & Save to DB
+                try {
+                    const generatedFiles = await sandboxManager.getSandboxFiles(sandboxId);
 
-                activeServers[sandboxId] = { port, process: viteProcess };
+                    const { error } = await supabase
+                        .from('projects')
+                        .update({ files: generatedFiles })
+                        .eq('id', sandboxId);
 
-                viteProcess.stdout?.on('data', (data) => {
-                    const raw = data.toString();
-                    // Optional: sendLog(sandboxId, `[Vite] ${raw.trim()}`);
-                    if (raw.includes("ready in") || raw.includes("Local:")) {
-                        sendLog(sandboxId, `🌐 Live Server Ready!`);
-                        sendLog(sandboxId, `✅ DONE_URL:http://localhost:${PORT}/serve/${sandboxId}/`);
+                    if (error) {
+                        throw new Error(`DB Update Failed: ${error.message}`);
                     }
-                });
 
-                viteProcess.stderr?.on('data', (data) => {
-                    console.error(`[Vite ${sandboxId}] Error:`, data.toString());
-                });
+                    sendLog(sandboxId, `🌐 Files Saved Successfully!`);
+                    sendLog(sandboxId, `✅ DONE_FILES_SAVED:${sandboxId}`);
+
+                    // Clean up sandbox to save disk space now that it's in the DB
+                    await sandboxManager.deleteSandbox(sandboxId);
+                } catch (dbErr: any) {
+                    console.error(`[DB Error ${sandboxId}]`, dbErr);
+                    sendLog(sandboxId, `❌ Failed to save files: ${dbErr.message}`);
+                }
 
                 // Restore console log
                 console.log = originalLog;
@@ -139,24 +142,6 @@ app.get("/api/orchestrate/stream/:uuid", (req, res) => {
     req.on('close', () => {
         delete clients[uuid];
     });
-});
-
-/**
- * 3. Proxy Route for Live Vite Server
- */
-app.use("/serve/:uuid", (req, res, next) => {
-    const { uuid } = req.params;
-    const serverInfo = activeServers[uuid];
-
-    if (!serverInfo) {
-        return res.status(404).send("Live server not found or still booting.");
-    }
-
-    // Proxy the request directly to the local Vite instance
-    proxy(`http://localhost:${serverInfo.port}`, {
-        // Forward the full original URL so it matches Vite's dynamic base path
-        proxyReqPathResolver: (req) => req.originalUrl
-    })(req, res, next);
 });
 
 app.listen(PORT, () => {

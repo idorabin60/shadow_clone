@@ -26,8 +26,8 @@ export class SandboxManager {
      * Creates a new isolated environment for a generation request.
      * Copies the Vite scaffold and runs npm install.
      */
-    public async createSandbox(): Promise<{ sandboxId: string, sandboxPath: string }> {
-        const sandboxId = randomUUID();
+    public async createSandbox(projectId?: string): Promise<{ sandboxId: string, sandboxPath: string }> {
+        const sandboxId = projectId || randomUUID();
         const sandboxPath = path.join(this.baseDir, sandboxId);
 
         try {
@@ -61,6 +61,38 @@ export class SandboxManager {
             console.log(`[Sandbox] Deleted ${sandboxId}`);
         } catch (err) {
             console.error(`[Sandbox] Failed to delete ${sandboxId}`, err);
+        }
+    }
+
+    /**
+     * Reads all code files in the sandbox into a flat Sandpack-compatible object
+     */
+    public async getSandboxFiles(sandboxId: string): Promise<Record<string, string>> {
+        const sandboxPath = path.join(this.baseDir, sandboxId);
+        const files: Record<string, string> = {};
+
+        async function readDir(dir: string, base: string) {
+            const entries = await fs.readdir(dir, { withFileTypes: true });
+            for (const entry of entries) {
+                if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
+                const fullPath = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    await readDir(fullPath, base);
+                } else {
+                    const relativePath = '/' + path.relative(base, fullPath).replace(/\\/g, '/');
+                    // filter locking and binaries to reduce DB payload size
+                    if (entry.name.endsWith('.lock') || entry.name === 'package-lock.json') continue;
+                    files[relativePath] = await fs.readFile(fullPath, 'utf-8');
+                }
+            }
+        }
+
+        try {
+            await readDir(sandboxPath, sandboxPath);
+            return files;
+        } catch (err) {
+            console.error(`[Sandbox] Failed to read files for sandbox ${sandboxId}:`, err);
+            return {};
         }
     }
 }

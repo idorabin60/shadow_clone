@@ -9,7 +9,6 @@ import { setMaxListeners } from "events";
 
 dotenv.config();
 setMaxListeners(50);
-import { randomUUID } from "crypto";
 
 // Mock implementation of Tool calling via literal execution.
 // In a full @langchain/core agent setup, we'd bindTools(). 

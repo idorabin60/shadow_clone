@@ -3,6 +3,7 @@ create table public.projects (
   id uuid default gen_random_uuid() primary key,
   user_id uuid references auth.users not null,
   name text not null,
+  files jsonb,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 

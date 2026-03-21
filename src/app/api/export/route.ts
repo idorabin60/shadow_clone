@@ -1,33 +1,33 @@
 import { NextResponse } from "next/server";
-import { renderToStaticMarkup } from "react-dom/server";
 import { PageAssembler } from "@/lib/assembler/PageAssembler";
 import fs from "fs/promises";
 import path from "path";
 
 export async function POST(req: Request) {
-    try {
-        const { data, businessInfo, theme } = await req.json();
+  try {
+    const { data, businessInfo, theme } = await req.json();
 
-        if (!data || !businessInfo || !theme) {
-            return NextResponse.json({ error: "Missing required data" }, { status: 400 });
-        }
+    if (!data || !businessInfo || !theme) {
+      return NextResponse.json({ error: "Missing required data" }, { status: 400 });
+    }
 
-        // Read the CSS files from disk so we can inline them
-        const globalsCssPath = path.join(process.cwd(), "src/app/globals.css");
-        const templatesCssPath = path.join(process.cwd(), "src/styles/templates.css");
+    // Read the CSS files from disk so we can inline them
+    const globalsCssPath = path.join(process.cwd(), "src/app/globals.css");
+    const templatesCssPath = path.join(process.cwd(), "src/styles/templates.css");
 
-        const globalsCss = await fs.readFile(globalsCssPath, "utf-8");
-        const templatesCss = await fs.readFile(templatesCssPath, "utf-8");
+    const globalsCss = await fs.readFile(globalsCssPath, "utf-8");
+    const templatesCss = await fs.readFile(templatesCssPath, "utf-8");
 
-        // Render the React components to a static HTML string
-        // We pass the props exactly as we do in the frontend
-        const componentHtml = renderToStaticMarkup(
-            // @ts-ignore - renderToStaticMarkup expects a ReactElement, which PageAssembler returns
-            PageAssembler({ data, businessInfo, theme })
-        );
+    // Render the React components to a static HTML string
+    // We pass the props exactly as we do in the frontend
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const componentHtml = renderToStaticMarkup(
+      // @ts-ignore - renderToStaticMarkup expects a ReactElement, which PageAssembler returns
+      PageAssembler({ data, businessInfo, theme })
+    );
 
-        // Construct the final, standalone HTML document
-        const fullHtml = `<!DOCTYPE html>
+    // Construct the final, standalone HTML document
+    const fullHtml = `<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="UTF-8">
@@ -75,16 +75,16 @@ export async function POST(req: Request) {
 </body>
 </html>`;
 
-        // Return the raw HTML string
-        return new NextResponse(fullHtml, {
-            status: 200,
-            headers: {
-                "Content-Type": "text/html; charset=utf-8",
-            },
-        });
+    // Return the raw HTML string
+    return new NextResponse(fullHtml, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+      },
+    });
 
-    } catch (error: any) {
-        console.error("Export Error:", error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+  } catch (error: any) {
+    console.error("Export Error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
 }

@@ -2,6 +2,8 @@
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Sparkles, ArrowUp, LayoutTemplate, BriefcaseBusiness, ShoppingBag, ArrowRight } from "lucide-react";
+import { UserButton } from "@/components/auth/UserButton";
+import { motion } from "framer-motion";
 
 const SUGGESTIONS = [
   { icon: <BriefcaseBusiness className="w-4 h-4" />, text: "אתר לעורך דין מומחה" },
@@ -48,7 +50,12 @@ export default function Home() {
       <div className="absolute inset-0 bg-[linear-gradient(to_right,#ffffff05_1px,transparent_1px),linear-gradient(to_bottom,#ffffff05_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] pointer-events-none" />
 
       {/* Content wrapper with z-index to stay above background details */}
-      <div className="relative z-10 flex flex-col min-h-screen">
+      <motion.div
+        initial={{ opacity: 0, y: 15, filter: "blur(8px)" }}
+        animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+        transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1] as const }}
+        className="relative z-10 flex flex-col min-h-screen"
+      >
         {/* Top Navigation */}
         <nav className="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-transparent">
           <div className="flex items-center gap-2 text-xl font-bold tracking-tight text-white">
@@ -63,14 +70,7 @@ export default function Home() {
             <a href="#" className="hover:text-white transition-colors">הגדרות מתקדמות</a>
           </div>
 
-          <div className="flex items-center gap-3">
-            <button className="px-4 py-2 text-sm font-medium text-white bg-zinc-800/80 hover:bg-zinc-700 backdrop-blur-md rounded-full transition-all border border-white/5">
-              התחבר
-            </button>
-            <button className="px-4 py-2 text-sm font-medium text-black bg-white hover:bg-zinc-200 rounded-full transition-all shadow-[0_0_20px_rgba(255,255,255,0.2)]">
-              הרשמה
-            </button>
-          </div>
+          <UserButton />
         </nav>
 
         {/* Main Content */}
@@ -117,7 +117,7 @@ export default function Home() {
             </div>
           </div>
         </main>
-      </div>
+      </motion.div>
     </div>
   );
 }
