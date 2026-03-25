@@ -3,7 +3,8 @@
 import { createClient } from "@/utils/supabase/server"
 import { redirect } from "next/navigation"
 
-export async function loginWithGoogle() {
+export async function 
+loginWithGoogle() {
     const supabase = await createClient()
 
     // Use explicit localhost fallback if necessary when AUTH_URL hasn't evaluated correctly

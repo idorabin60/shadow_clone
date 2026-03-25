@@ -27,32 +27,17 @@ export async function updateSession(request: NextRequest) {
         }
     )
 
-    const code = request.nextUrl.searchParams.get('code')
-    if (code) {
-        const { error } = await supabase.auth.exchangeCodeForSession(code)
-        if (!error) {
-            const nextUrl = request.nextUrl.clone()
-            nextUrl.searchParams.delete('code')
-            nextUrl.searchParams.delete('next')
-            if (nextUrl.pathname.startsWith('/login') || nextUrl.pathname.startsWith('/signup')) {
-                nextUrl.pathname = '/'
-            }
-
-            const newRedirectResponse = NextResponse.redirect(nextUrl)
-
-            // CRITICAL: We must transfer the cookies that 'exchangeCodeForSession' just bound into supabaseResponse
-            // over to this new RedirectResponse! Otherwise, the cookies are dropped and the user is immediately unauthenticated!
-            supabaseResponse.cookies.getAll().forEach((cookie) => {
-                newRedirectResponse.cookies.set(cookie.name, cookie.value)
-            })
-
-            return newRedirectResponse
-        }
-    }
+    // The code parameter is handled directly by the API callback route (e.g. /api/auth/callback/google)
+    // We do not intercept it here to prevent stripping the code from the URL cleanly.
 
     // Fetch the user to refresh the auth token if needed
     const { data: { user } } = await supabase.auth.getUser()
     const isAuthPage = request.nextUrl.pathname.startsWith('/login') || request.nextUrl.pathname.startsWith('/signup')
+
+    // Bypass auth check and redirect logic for auth callback routes
+    if (request.nextUrl.pathname.startsWith('/api/auth/callback')) {
+        return supabaseResponse
+    }
 
     if (!user && !isAuthPage) {
         const url = request.nextUrl.clone()
