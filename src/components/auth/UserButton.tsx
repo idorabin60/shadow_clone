@@ -6,6 +6,7 @@ import Link from "next/link"
 export function UserButton() {
     const [user, setUser] = useState<any>(null)
     const [loading, setLoading] = useState(true)
+    const [imageError, setImageError] = useState(false)
 
     useEffect(() => {
         getSessionData().then((u) => {
@@ -43,11 +44,18 @@ export function UserButton() {
             <div className="h-4 w-[1px] bg-white/10" />
             <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-white">{name}</span>
-                {avatarUrl ? (
-                    <img src={avatarUrl} alt={name} className="w-7 h-7 rounded-full border border-white/10" />
+                {avatarUrl && !imageError ? (
+                    <img
+                        src={avatarUrl}
+                        alt={name}
+                        className="w-7 h-7 rounded-full border border-white/10"
+                        referrerPolicy="no-referrer"
+                        crossOrigin="anonymous"
+                        onError={() => setImageError(true)}
+                    />
                 ) : (
-                    <div className="w-7 h-7 rounded-full bg-primary/20 flex items-center justify-center text-xs border border-white/10">
-                        {name.charAt(0)}
+                    <div className="w-7 h-7 rounded-full bg-primary/20 flex items-center justify-center text-sm font-bold border border-white/10">
+                        {name.charAt(0).toUpperCase()}
                     </div>
                 )}
             </div>

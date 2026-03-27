@@ -400,7 +400,7 @@ Your task: Output the XML <file> blocks to construct the frontend application ef
             console.log(`   └─ 🧠 LLM Thoughts: ${response.content.substring(0, 300).replace(/\n/g, " ")}...`);
 
             // XML Artifact Extraction Engine
-            const fileRegex = /<file path="([^"]+)">\n*([\s\S]*?)\n*<\/file>/g;
+            const fileRegex = /<file[^>]*path=["']([^"']+)["'][^>]*>\n*([\s\S]*?)\n*<\/file>/gi;
             let match;
             while ((match = fileRegex.exec(response.content)) !== null) {
                 const filePath = match[1];

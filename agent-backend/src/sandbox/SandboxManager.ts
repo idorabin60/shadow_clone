@@ -31,8 +31,23 @@ export class SandboxManager {
         const sandboxPath = path.join(this.baseDir, sandboxId);
 
         try {
-            // 1. Copy the full scaffold folder recursively
-            await fs.cp(this.scaffoldDir, sandboxPath, { recursive: true });
+            // 1. Copy the scaffold folder recursively, EXCLUDING node_modules (to save disk IO)
+            await fs.cp(this.scaffoldDir, sandboxPath, {
+                recursive: true,
+                filter: (src) => !src.includes('node_modules') && !src.includes('.git')
+            });
+
+            // 1b. Symlink the node_modules from the scaffold dir to save space and speed up Vite build
+            const scaffoldNodeModules = path.join(this.scaffoldDir, 'node_modules');
+            const sandboxNodeModules = path.join(sandboxPath, 'node_modules');
+            try {
+                // Check if node_modules exists in scaffold first to avoid crashing
+                await fs.access(scaffoldNodeModules);
+                await fs.symlink(scaffoldNodeModules, sandboxNodeModules, 'dir');
+                console.log(`[Sandbox] Symlinked node_modules for ${sandboxId}`);
+            } catch (e) {
+                console.log(`[Sandbox] No node_modules in scaffold. Symlink skipped.`);
+            }
 
             // 2. We don't necessarily run npm install every time if we can share node_modules 
             // or use a global installation, but for total isolation, running a fast install is safer.

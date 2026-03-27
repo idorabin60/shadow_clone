@@ -10,8 +10,24 @@ if (typeof global.ReadableStream === 'undefined') {
 import { SandboxManager } from "./sandbox/SandboxManager";
 import { orchestratorApp } from "./orchestrator/graph";
 import { supabase } from "./db/supabase";
+import { AsyncLocalStorage } from "async_hooks";
 
 dotenv.config();
+
+// Fix concurrent console.log leak using AsyncLocalStorage
+const logStorage = new AsyncLocalStorage<(msg: string) => void>();
+const originalLog = console.log;
+
+console.log = (...args) => {
+    originalLog(...args);
+    const logger = logStorage.getStore();
+    if (logger) {
+        const str = args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ');
+        if (str.includes('[') || str.includes('Error') || str.includes('Success')) {
+            logger(str);
+        }
+    }
+};
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -60,58 +76,47 @@ app.post("/api/orchestrate", async (req, res) => {
 
         // 3. Kick off LangGraph async
         (async () => {
-            const originalLog = console.log;
             try {
-                console.log(`[Job ${sandboxId}] Starting orchestrator...`);
+                // Keep the initial log out of storage or inside
 
-                // Let's hook into console.log to broadcast SSE
-                // In a real app we would pass a logger callback to the nodes.
-                console.log = (...args) => {
-                    originalLog(...args);
-                    const str = args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ');
-                    if (str.includes(sandboxId) || str.includes('[')) { // naive filter for our logs
-                        sendLog(sandboxId, str);
+                logStorage.run((msg: string) => sendLog(sandboxId, msg), async () => {
+                    console.log(`[Job ${sandboxId}] Starting orchestrator...`);
+
+                    const finalState = await orchestratorApp.invoke({
+                        businessInput,
+                        sandboxPath,
+                        status: "planning",
+                        messages: [],
+                        errorLogs: null,
+                        iterationCount: 0
+                    });
+
+                    sendLog(sandboxId, "✅ Generation Complete! Saving files to database...");
+
+                    // Phase 5: Extract Sandbox Files & Save to DB
+                    try {
+                        const generatedFiles = await sandboxManager.getSandboxFiles(sandboxId);
+
+                        const { error } = await supabase
+                            .from('projects')
+                            .update({ files: generatedFiles })
+                            .eq('id', sandboxId);
+
+                        if (error) {
+                            throw new Error(`DB Update Failed: ${error.message}`);
+                        }
+
+                        sendLog(sandboxId, `🌐 Files Saved Successfully!`);
+                        sendLog(sandboxId, `✅ DONE_FILES_SAVED:${sandboxId}`);
+
+                        // Clean up sandbox to save disk space now that it's in the DB
+                        await sandboxManager.deleteSandbox(sandboxId);
+                    } catch (dbErr: any) {
+                        console.error(`[DB Error ${sandboxId}]`, dbErr);
+                        sendLog(sandboxId, `❌ Failed to save files: ${dbErr.message}`);
                     }
-                };
-
-                const finalState = await orchestratorApp.invoke({
-                    businessInput,
-                    sandboxPath,
-                    status: "planning",
-                    messages: [],
-                    errorLogs: null,
-                    iterationCount: 0
-                });
-
-                sendLog(sandboxId, "✅ Generation Complete! Saving files to database...");
-
-                // Phase 5: Extract Sandbox Files & Save to DB
-                try {
-                    const generatedFiles = await sandboxManager.getSandboxFiles(sandboxId);
-
-                    const { error } = await supabase
-                        .from('projects')
-                        .update({ files: generatedFiles })
-                        .eq('id', sandboxId);
-
-                    if (error) {
-                        throw new Error(`DB Update Failed: ${error.message}`);
-                    }
-
-                    sendLog(sandboxId, `🌐 Files Saved Successfully!`);
-                    sendLog(sandboxId, `✅ DONE_FILES_SAVED:${sandboxId}`);
-
-                    // Clean up sandbox to save disk space now that it's in the DB
-                    await sandboxManager.deleteSandbox(sandboxId);
-                } catch (dbErr: any) {
-                    console.error(`[DB Error ${sandboxId}]`, dbErr);
-                    sendLog(sandboxId, `❌ Failed to save files: ${dbErr.message}`);
-                }
-
-                // Restore console log
-                console.log = originalLog;
+                }); // End AsyncLocalStorage scope
             } catch (err: any) {
-                console.log = originalLog; // Essential: restore console.log to print to terminal!
                 console.error(`[Fatal Orchestrator Error] ${err.name}: ${err.message}`, err);
                 sendLog(sandboxId, `❌ Fatal API Error: ${err.message}`);
             }
