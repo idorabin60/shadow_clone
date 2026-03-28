@@ -3,6 +3,11 @@ import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
+export { takeScreenshots } from './screenshot';
+export type { ScreenshotResult, DomChecks } from './screenshot';
+export { runVisualReview, formatVisualErrors } from './visualReview';
+export type { VisualQAResult } from './visualReview';
+
 const execAsync = promisify(exec);
 
 export type Operation =

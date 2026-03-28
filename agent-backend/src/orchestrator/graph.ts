@@ -3,10 +3,10 @@ import { ChatOpenAI } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { SystemMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { tools } from "../tools";
+import { takeScreenshots, runVisualReview, formatVisualErrors } from "../tools";
 import { OrchestrationState } from "./state";
-import dotenv from "dotenv";
 import { setMaxListeners } from "events";
-
+import dotenv from 'dotenv';
 dotenv.config();
 setMaxListeners(50);
 
@@ -23,7 +23,7 @@ const openaiModel = new ChatOpenAI({
 // the industry gold standard for autonomous React/Vite coding and complex tool patching.
 const claudePmModel = process.env.ANTHROPIC_API_KEY
     ? new ChatAnthropic({
-        modelName: "claude-opus-4-6",
+        modelName: "claude-sonnet-4-6",
         temperature: 0,
         maxRetries: 3,
         anthropicApiKey: process.env.ANTHROPIC_API_KEY
@@ -511,39 +511,85 @@ ${errorContext}`;
 
 /**
  * Node 3: QA Reviewer
- * Runs the TypeScript compiler and Vite Build to catch all syntax, type, and module errors.
+ * Runs TypeScript compiler, Vite Build, and Visual QA (Playwright screenshots + Vision LLM).
  */
 async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationState>> {
     console.log(`[System] QA Reviewer initiating automated tests...`);
+
+    // --- Phase 1: TypeScript compilation ---
     console.log("🔎 [QA Engineer] Running TypeScript compiler checks...");
     const tsResult = await tools.runTypeScript(state.sandboxPath);
 
-    if (tsResult.includes("Success:")) {
-        console.log("🔎 [QA Engineer] TypeScript passed. Running Vite Build to check module resolution and bundler errors...");
-        const buildResult = await tools.npmRun(state.sandboxPath, "build");
-
-        if (buildResult.includes("Command executed successfully")) {
-            console.log("✅ [QA] No errors found! Ready for deployment.");
-            return {
-                status: "success",
-                errorLogs: null,
-                messages: state.messages
-            };
-        } else {
-            console.log("❌ [QA] Vite Build errors found. Sending back to Developer.");
-            return {
-                status: "failed",
-                errorLogs: `Vite Build failed:\n${buildResult}`,
-                messages: [...state.messages, new HumanMessage(`[Automated QA Pipeline] Vite Build failed. You must fix the code:\n${buildResult}\n\nPlease analyze the errors. Outline the \"Top 3 probable causes\" and a \"recommended patch plan\" before using edit_file.`)]
-            };
-        }
-    } else {
+    if (!tsResult.includes("Success:")) {
         console.log("❌ [QA] TypeScript errors found. Sending back to Developer.");
         return {
             status: "failed",
             errorLogs: `TypeScript TypeCheck failed:\n${tsResult}`,
             messages: [...state.messages, new HumanMessage(`[Automated QA Pipeline] TypeScript Compiler errors found. You must patch the code:\n${tsResult}\n\nPlease analyze the errors. Outline the \"Top 3 probable causes\" and a \"recommended patch plan\" before using edit_file.`)]
         };
+    }
+
+    // --- Phase 2: Vite Build ---
+    console.log("🔎 [QA Engineer] TypeScript passed. Running Vite Build...");
+    const buildResult = await tools.npmRun(state.sandboxPath, "build");
+
+    if (!buildResult.includes("Command executed successfully")) {
+        console.log("❌ [QA] Vite Build errors found. Sending back to Developer.");
+        return {
+            status: "failed",
+            errorLogs: `Vite Build failed:\n${buildResult}`,
+            messages: [...state.messages, new HumanMessage(`[Automated QA Pipeline] Vite Build failed. You must fix the code:\n${buildResult}\n\nPlease analyze the errors. Outline the \"Top 3 probable causes\" and a \"recommended patch plan\" before using edit_file.`)]
+        };
+    }
+
+    // --- Phase 3: Visual QA (Screenshots + Vision LLM) ---
+    // Skip visual QA on the last iteration to avoid infinite visual polish loops
+    if (state.iterationCount >= 5) {
+        console.log("✅ [QA] Build passed. Skipping visual QA on final iteration to avoid infinite loops.");
+        return { status: "success", errorLogs: null, messages: state.messages };
+    }
+
+    console.log("🎨 [QA Engineer] Build passed. Starting Visual QA...");
+    try {
+        const screenshots = await takeScreenshots(state.sandboxPath);
+
+        // Fast-fail on blank page without spending tokens on vision
+        if (screenshots.domChecks.isBlankPage) {
+            console.log("❌ [QA] Visual QA: Page is blank.");
+            return {
+                status: "failed",
+                errorLogs: "Visual QA: Page is blank or nearly empty. No visible content rendered.",
+                messages: [...state.messages, new HumanMessage(
+                    `[Visual QA] CRITICAL: The page is blank or nearly empty (only ${screenshots.domChecks.bodyTextLength} characters of text). The React components are not rendering visible content. Check that App.tsx exports a proper component tree and that all sections render Hebrew text content.`
+                )]
+            };
+        }
+
+        const spec = await tools.readFile(state.sandboxPath, "spec.md");
+        const visualResult = await runVisualReview(screenshots, spec);
+
+        console.log(`🎨 [QA] Visual QA Score: ${visualResult.score}/10 — ${visualResult.passed ? "PASSED" : "FAILED"}`);
+
+        if (visualResult.passed) {
+            console.log("✅ [QA] All checks passed! Ready for deployment.");
+            return { status: "success", errorLogs: null, messages: state.messages };
+        }
+
+        // Visual QA failed — send detailed feedback to developer
+        const errorReport = formatVisualErrors(visualResult);
+        console.log("❌ [QA] Visual QA failed. Sending feedback to Developer.");
+        return {
+            status: "failed",
+            errorLogs: `Visual QA failed:\n${errorReport}`,
+            messages: [...state.messages, new HumanMessage(
+                `[Visual QA Pipeline] The page builds successfully but has UI quality issues (score: ${visualResult.score}/10):\n\n${errorReport}\n\nFix the critical issues and warnings by outputting corrected <file> blocks. Focus on the most impactful visual improvements first.`
+            )]
+        };
+    } catch (err: any) {
+        // If Playwright/screenshot fails, don't block the pipeline — pass with a warning
+        console.log(`⚠️ [QA] Visual QA error (non-blocking): ${err.message}`);
+        console.log("✅ [QA] Build passed. Visual QA skipped due to error.");
+        return { status: "success", errorLogs: null, messages: state.messages };
     }
 }
 
