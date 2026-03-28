@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useCallback, useTransition } from "react";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
     ImageIcon,
@@ -135,6 +136,7 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
 Textarea.displayName = "Textarea"
 
 export function AnimatedAIChat() {
+    const router = useRouter();
     const [value, setValue] = useState("");
     const [attachments, setAttachments] = useState<string[]>([]);
     const [isTyping, setIsTyping] = useState(false);
@@ -260,14 +262,8 @@ export function AnimatedAIChat() {
 
     const handleSendMessage = () => {
         if (value.trim()) {
-            startTransition(() => {
-                setIsTyping(true);
-                setTimeout(() => {
-                    setIsTyping(false);
-                    setValue("");
-                    adjustHeight(true);
-                }, 3000);
-            });
+            setIsTyping(true);
+            router.push(`/workspace?prompt=${encodeURIComponent(value.trim())}`);
         }
     };
 

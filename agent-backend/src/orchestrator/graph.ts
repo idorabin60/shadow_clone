@@ -25,7 +25,7 @@ const claudePmModel = process.env.ANTHROPIC_API_KEY
     ? new ChatAnthropic({
         modelName: "claude-opus-4-6",
         temperature: 0,
-        maxRetries: 0,
+        maxRetries: 3,
         anthropicApiKey: process.env.ANTHROPIC_API_KEY
     })
     : openaiModel;
@@ -34,13 +34,13 @@ const claudeDevModel = process.env.ANTHROPIC_API_KEY
     ? new ChatAnthropic({
         modelName: "claude-opus-4-6",
         temperature: 0,
-        maxRetries: 0,
+        maxRetries: 3,
         anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     })
     : openaiModel;
 
-// The PM and Developer use Claude (if available), QA uses GPT-4o
-const pmModel = claudePmModel;
+// The PM uses Claude with a direct fallback to OpenAI for 529/429 errors.
+const pmModel = claudePmModel
 const devModel = claudeDevModel;
 const qaModel = openaiModel;
 
@@ -75,6 +75,11 @@ Write the exact content of the spec.md wrapped in a markdown code block.`;
         new HumanMessage("Please generate the technical spec.md using my exact business details and the strictest Dribbble/Awwwards Vibe rules."),
         ...state.messages
     ]);
+
+    // Add debug log to verify which model ACTUALLY served the request
+    const actualModelName = response.response_metadata?.model || response.response_metadata?.model_name || "Unknown LLM Model";
+    console.log(`   └─ 🔌 [Runtime Verification] Product Manager successfully responded using model: ${actualModelName}`);
+
     // Extract text inside ```md or just use raw text
     let specContent = response.content as string;
     const mdMatch = specContent.match(/```(?:markdown|md|)\n([\s\S]*?)```/);
@@ -150,9 +155,14 @@ You must optimize for the fewest LLM tool invocation round-trips possible.
    </file>
 3. VERIFY: We will automatically extract your XML artifacts, save them, and run 'tsc --noEmit' to verify.
 
-${errorContext}
+Your task: Output the XML <file> blocks to construct the frontend application efficiently in 1-2 steps. Finish the turn ONLY when the entire codebase is fully assembled and visually stunning according to the spec.
 
-Your task: Output the XML <file> blocks to construct the frontend application efficiently in 1-2 steps. Finish the turn ONLY when the entire codebase is fully assembled and visually stunning according to the spec.`;
+Here is the exact spec.md written by the UX Architect:
+=========================================
+${spec}
+=========================================
+
+${errorContext}`;
 
     const prompt = devPrompt;
     let specReadCount = 0;
@@ -309,7 +319,13 @@ Your task: Output the XML <file> blocks to construct the frontend application ef
     const toolsByName = Object.fromEntries(agentTools.map((t) => [t.name, t]));
 
     // Bind the tools to the Developer Model (Claude preferred)
-    const modelWithTools = devModel.bindTools(agentTools);
+    const claudeWithTools = devModel.bindTools(agentTools);
+    const gptWithTools = openaiModel.bindTools(agentTools);
+
+    // Utilize LangChain's native .withFallbacks() to instantly reroute to OpenAI if Anthropic Rate Limits hit
+    const modelWithTools = claudeWithTools.withFallbacks({
+        fallbacks: [gptWithTools]
+    });
 
     // Inherit the pure message history without duplicating the Developer prompt
     let currentMessages = [...state.messages];
@@ -322,7 +338,7 @@ Your task: Output the XML <file> blocks to construct the frontend application ef
     let maxSteps = 100;
     let steps = 0;
 
-    console.log(`[Model] Developer using: Anthropic (Claude 4.6 Opus) / GPT-4o proxy context`);
+    console.log(`[Model] Developer utilizing: ${process.env.ANTHROPIC_API_KEY ? "Anthropic (Claude 4.6 Opus)" : "OpenAI (GPT-4o)"}`);
 
     const trimMessages = (msgs: any[], max = 30) => {
         if (msgs.length <= max) return msgs;
@@ -346,39 +362,10 @@ Your task: Output the XML <file> blocks to construct the frontend application ef
         return res;
     };
 
-    let forceFallback = false;
-
     const invokeWithBackoff = async (model: any, msgs: any[]) => {
         const payload = [new SystemMessage(prompt), ...msgs];
-
-        try {
-            // If fallback was triggered in a previous loop step, reroute entirely
-            if (forceFallback) {
-                return await openaiModel.invoke(payload);
-            }
-            return await model.invoke(payload);
-        } catch (e: any) {
-            const is429 = e?.status === 429 || e?.message?.includes("429") || e?.message?.includes("rate_limit");
-            let retryAfter = Number(e?.headers?.get?.("retry-after")) || 4;
-
-            if (is429) {
-                console.log(`   └─ ⚠️ Rate Limit hit. Backing off for ${retryAfter} seconds...`);
-                await new Promise(r => setTimeout(r, retryAfter * 1000));
-
-                try {
-                    return await model.invoke(payload);
-                } catch (retryError: any) {
-                    const isSecond429 = retryError?.status === 429 || retryError?.message?.includes("429");
-                    if (isSecond429) {
-                        console.log(`   └─ 🚨 Second Rate Limit hit. Falling back to OpenAI (gpt-4o) to guarantee progress...`);
-                        forceFallback = true;
-                        return await openaiModel.invoke(payload);
-                    }
-                    throw retryError;
-                }
-            }
-            throw e;
-        }
+        // Native LangChain fallbacks automatically handle 429 and 500 errors by routing to GPT-4o
+        return await model.invoke(payload);
     };
 
     let patchAttempts = 0;
@@ -391,13 +378,18 @@ Your task: Output the XML <file> blocks to construct the frontend application ef
         currentMessages = trimMessages(currentMessages, 80);
         console.log(`   └─ ⌛ Model is thinking/generating code (this may take 30-60s for full patches)...`);
         const response = await invokeWithBackoff(modelWithTools, currentMessages);
-        currentMessages.push(response);
+
+        // Add debug log to verify which model ACTUALLY served the request
+        const actualModelName = response.response_metadata?.model || response.response_metadata?.model_name || "Unknown LLM Model";
+        console.log(`   └─ 🔌 [Runtime Verification] Developer successfully responded using model: ${actualModelName}`);
 
         let didPatch = false;
         let xmlErrorMessages: HumanMessage[] = [];
 
         if (response.content && typeof response.content === "string" && response.content.trim().length > 0) {
             console.log(`   └─ 🧠 LLM Thoughts: ${response.content.substring(0, 300).replace(/\n/g, " ")}...`);
+
+            let cleanedContent = response.content;
 
             // XML Artifact Extraction Engine
             const fileRegex = /<file[^>]*path=["']([^"']+)["'][^>]*>\n*([\s\S]*?)\n*<\/file>/gi;
@@ -426,8 +418,16 @@ Your task: Output the XML <file> blocks to construct the frontend application ef
                 fileCache.delete(filePath);
                 await tools.writeFile(state.sandboxPath, filePath, fileContent);
                 didPatch = true;
+
+                // Strip the massive XML payload from the AI's response history to prevent Token Rate Limit crashes!
+                cleanedContent = cleanedContent.replace(match[0], `<file path="${filePath}">[File written to disk. Use read_file if you need to review the code.]</file>`);
             }
+
+            // Push the heavily compressed/purged message object back to the orchestrator state array
+            response.content = cleanedContent;
         }
+
+        currentMessages.push(response);
 
         currentMessages.push(...xmlErrorMessages);
 
@@ -514,7 +514,7 @@ Your task: Output the XML <file> blocks to construct the frontend application ef
  * Runs the TypeScript compiler and Vite Build to catch all syntax, type, and module errors.
  */
 async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationState>> {
-    console.log(`[Model] QA Reviewer using: OpenAI (GPT-4o)`);
+    console.log(`[System] QA Reviewer initiating automated tests...`);
     console.log("🔎 [QA Engineer] Running TypeScript compiler checks...");
     const tsResult = await tools.runTypeScript(state.sandboxPath);
 
