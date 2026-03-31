@@ -1,7 +1,7 @@
 import { StateGraph, END } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
-import { SystemMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
+import { BaseMessage, SystemMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { tools } from "../tools";
 import { takeScreenshots, runVisualReview, formatVisualErrors } from "../tools";
 import { OrchestrationState } from "./state";
@@ -46,6 +46,115 @@ const claudeDevModel = process.env.ANTHROPIC_API_KEY
 const pmModel = claudePmModel
 const devModel = claudeDevModel;
 const qaModel = openaiModel;
+
+// --- Context Management Helpers ---
+
+interface DevMemory {
+    intent: string;
+    components_completed: string[];
+    design_decisions: string[];
+    known_issues: string[];
+    next_steps: string[];
+}
+
+// Normalize BaseMessage content to string — required because Claude returns
+// content as [{type: "text", text: "..."}] arrays, not plain strings.
+const getContentString = (m: { content: unknown }): string => {
+    if (typeof m.content === "string") return m.content;
+    if (Array.isArray(m.content)) {
+        return (m.content as Array<{ type: string; text?: string }>)
+            .filter(b => b.type === "text")
+            .map(b => b.text ?? "")
+            .join("\n");
+    }
+    return "";
+};
+
+const OBSERVATION_STUB = (name: string) =>
+    `[Tool output from '${name}' — omitted to save context. Re-invoke the tool if you need this output again.]`;
+
+// Replaces hard message truncation with selective observation masking.
+// AIMessage reasoning is always kept; old ToolMessage and large HumanMessage
+// blobs are compressed to 1-line stubs (10:1 compression on tool outputs).
+const maskMessages = (msgs: BaseMessage[], max: number): BaseMessage[] => {
+    const beforeCount = msgs.length;
+    const beforeChars = msgs.reduce((s, m) => s + getContentString(m).length, 0);
+
+    if (msgs.length <= max) {
+        console.log(`[MASK] No masking needed: ${beforeCount} msgs, ${beforeChars} chars — under limit of ${max}`);
+        return msgs;
+    }
+
+    // Always pin the first message (initial human prompt / seed)
+    const first = msgs[0];
+
+    // Find the anchor by metadata tag — immune to false positives from LLM echoing "DEV_MEMORY"
+    const pinnedAnchor = msgs.find(
+        m => (m.additional_kwargs as any)?.__anchor === true
+    );
+    console.log(`[MASK] Anchor pinned: ${pinnedAnchor ? "YES" : "NO — anchor message not found in history"}`);
+
+    // Keep last 30 messages verbatim — covers ~5-6 tool call/response cycles
+    const RECENT_WINDOW = 30;
+    const oldMsgs = msgs.slice(1, msgs.length - RECENT_WINDOW);
+    const recentMsgs = msgs.slice(msgs.length - RECENT_WINDOW);
+    console.log(`[MASK] Split: ${oldMsgs.length} old msgs to compress, ${recentMsgs.length} recent msgs kept verbatim`);
+
+    let maskedToolCount = 0;
+    let maskedHumanCount = 0;
+    let keptAiCount = 0;
+
+    const maskedOld = oldMsgs.map(m => {
+        const type = m._getType?.();
+
+        // ToolMessage → always compress (10:1)
+        if (type === "tool") {
+            const tm = m as any;
+            maskedToolCount++;
+            return new ToolMessage({
+                content: OBSERVATION_STUB(tm.name ?? "tool"),
+                name: tm.name,
+                tool_call_id: tm.tool_call_id
+            });
+        }
+
+        // Large HumanMessage → mask QA feedback blobs
+        // QA errors are already re-injected into the system prompt as errorContext
+        if (type === "human" && getContentString(m).length > 500) {
+            maskedHumanCount++;
+            return new HumanMessage(
+                "[Previous QA/tool feedback — omitted. Current errors are in the system prompt.]"
+            );
+        }
+
+        // AIMessage → always keep verbatim (preserves reasoning chain)
+        if (type === "ai") keptAiCount++;
+        return m;
+    });
+
+    // Drop leading ToolMessages — Anthropic rejects ToolMessage without a preceding AIMessage
+    let droppedLeading = 0;
+    while (maskedOld.length > 0 && maskedOld[0]._getType?.() === "tool") {
+        maskedOld.shift();
+        droppedLeading++;
+    }
+    if (droppedLeading > 0) {
+        console.log(`[MASK] Dropped ${droppedLeading} orphaned leading ToolMessages`);
+    }
+
+    const result: BaseMessage[] = [first];
+    if (pinnedAnchor && !recentMsgs.includes(pinnedAnchor)) {
+        result.push(pinnedAnchor);
+    }
+    result.push(...maskedOld, ...recentMsgs);
+
+    const afterCount = result.length;
+    const afterChars = result.reduce((s, m) => s + getContentString(m).length, 0);
+    console.log(`[MASK] Result: ${beforeCount} → ${afterCount} msgs | chars: ${beforeChars} → ${afterChars} (${Math.round((1 - afterChars / beforeChars) * 100)}% reduction)`);
+    console.log(`[MASK] Compressed: ${maskedToolCount} ToolMsgs, ${maskedHumanCount} large HumanMsgs | Kept AI reasoning: ${keptAiCount} msgs`);
+
+    return result;
+};
 
 /**
  * Node 1: Product Manager
@@ -99,6 +208,18 @@ Write the exact content of the spec.md wrapped in a markdown code block.`;
     };
     await tools.writeFile(state.sandboxPath, "project_manifest.json", JSON.stringify(initialManifest, null, 2));
 
+    // Seed the living anchor memory — updated by Developer after each iteration
+    const initialMemory: DevMemory = {
+        intent: typeof state.businessInput === "string"
+            ? state.businessInput
+            : JSON.stringify(state.businessInput),
+        components_completed: [],
+        design_decisions: [],
+        known_issues: [],
+        next_steps: ["Build initial component structure per spec.md"]
+    };
+    await tools.writeFile(state.sandboxPath, "dev_memory.json", JSON.stringify(initialMemory, null, 2));
+
     emitter.stepDone("pm");
 
     return {
@@ -114,8 +235,38 @@ Write the exact content of the spec.md wrapped in a markdown code block.`;
  */
 async function developerNode(state: OrchestrationState): Promise<Partial<OrchestrationState>> {
     emitter.stepStart("developer", state.iterationCount);
-    // we use this spec?
     const spec = await tools.readFile(state.sandboxPath, "spec.md");
+
+    // Read living anchor memory — built up across iterations
+    let devMemory: DevMemory = {
+        intent: "",
+        components_completed: [],
+        design_decisions: [],
+        known_issues: [],
+        next_steps: []
+    };
+    try {
+        const memRaw = await tools.readFile(state.sandboxPath, "dev_memory.json");
+        if (!memRaw.startsWith("Error")) {
+            devMemory = JSON.parse(memRaw);
+            console.log(`[DEV_MEMORY] Loaded dev_memory.json — components_completed: [${devMemory.components_completed.join(", ")}], next_steps: ${devMemory.next_steps.length}`);
+        } else {
+            console.log(`[DEV_MEMORY] Could not read dev_memory.json: ${memRaw}`);
+        }
+    } catch (e: any) {
+        console.log(`[DEV_MEMORY] Parse error on dev_memory.json: ${e.message}`);
+    }
+
+    const memoryContext = `
+
+## SESSION MEMORY (Your persistent context across iterations)
+\`\`\`json
+${JSON.stringify(devMemory, null, 2)}
+\`\`\`
+Use this to understand what has already been built and what remains. You will update dev_memory.json at the end of your work via a <file path="dev_memory.json"> block.`;
+
+    console.log(`[DEV_NODE] Iteration ${state.iterationCount} | errorLogs present: ${!!state.errorLogs} | devPrompt memoryContext chars: ${memoryContext.length}`);
+
     const errorContext = state.errorLogs
         ? `\n\nCRITICAL FIX REQUIRED: QA found errors:\n${state.errorLogs}\n`
         : "";
@@ -158,7 +309,7 @@ Here is the exact spec.md written by the UX Architect:
 =========================================
 ${spec}
 =========================================
-
+${memoryContext}
 ${errorContext}`;
 
     const prompt = devPrompt;
@@ -326,36 +477,20 @@ ${errorContext}`;
 
     // Inherit the pure message history without duplicating the Developer prompt
     let currentMessages = [...state.messages];
+    console.log(`[DEV_NODE] Inheriting ${currentMessages.length} messages from state`);
 
     // Anthropic strictly requires at least one User-role message in the payload array.
+    // Tagged with __anchor so maskMessages always pins this message regardless of position.
     if (currentMessages.length === 0) {
-        currentMessages.push(new HumanMessage("Begin constructing the application strictly adhering to the UX architect's design specifications."));
+        console.log(`[DEV_NODE] No prior messages — pushing anchor seed message`);
+        currentMessages.push(new HumanMessage({
+            content: "Begin constructing the application strictly adhering to the UX architect's design specifications.",
+            additional_kwargs: { __anchor: true }
+        }));
     }
 
     let maxSteps = 100;
     let steps = 0;
-
-    const trimMessages = (msgs: any[], max = 30) => {
-        if (msgs.length <= max) return msgs;
-        // Keep the first message (prompt constraint)
-        const first = msgs[0];
-
-        // Find if there is a 'project_manifest.json' or 'DEV_MEMORY' payload to pin
-        const pinnedState = msgs.find(m => m.content && typeof m.content === "string" && (m.content.includes("DEV_MEMORY") || m.content.includes("project_manifest.json")));
-
-        let trimmed = msgs.slice(-(max - 1));
-
-        while (trimmed.length > 0 && trimmed[0]?._getType?.() === "tool") {
-            trimmed.shift();
-        }
-
-        const res = [first];
-        if (pinnedState && !trimmed.includes(pinnedState)) {
-            res.push(pinnedState);
-        }
-        res.push(...trimmed);
-        return res;
-    };
 
     const invokeWithBackoff = async (model: any, msgs: any[]) => {
         const payload = [new SystemMessage(prompt), ...msgs];
@@ -370,7 +505,12 @@ ${errorContext}`;
         steps++;
         emitter.info("developer", `Loop step ${steps}`);
 
-        currentMessages = trimMessages(currentMessages, 80);
+        const preCount = currentMessages.length;
+        currentMessages = maskMessages(currentMessages, 80);
+        const postCount = currentMessages.length;
+        const totalChars = currentMessages.reduce((s, m) => s + getContentString(m).length, 0);
+        console.log(`[LOOP step=${steps}] msgs: ${preCount} → ${postCount} | total content chars sent to LLM: ${totalChars}`);
+
         const response = await invokeWithBackoff(modelWithTools, currentMessages);
 
         let didPatch = false;
@@ -452,8 +592,11 @@ ${errorContext}`;
             currentMessages.push(...toolMessages);
         }
 
+        console.log(`[LOOP step=${steps}] didPatch=${didPatch} | tool_calls=${response.tool_calls?.length ?? 0} | response content chars: ${getContentString(response).length}`);
+
         // Break if NO tools called AND NO XML patches extracted
         if (!didPatch && (!response.tool_calls || response.tool_calls.length === 0)) {
+            console.log(`[LOOP step=${steps}] No tools + no patches — exiting loop`);
             emitter.stepDone("developer", state.iterationCount);
             break;
         }
@@ -489,10 +632,52 @@ ${errorContext}`;
         emitter.stepDone("developer", state.iterationCount);
     }
 
+    // Update dev_memory.json with session state for the next iteration.
+    // Uses GPT-4o (cheap) — not the Opus dev model. Non-blocking on failure.
+    console.log(`[DEV_MEMORY] Starting post-loop memory update (GPT-4o, last ${Math.min(5, currentMessages.length)} msgs)`);
+    try {
+        const memUpdateSystemPrompt = `You are a session state tracker. Based on the recent development session, output ONLY an updated dev_memory.json as a single XML <file> block. No other text.
+
+Current memory:
+${JSON.stringify(devMemory, null, 2)}
+
+Rules:
+- Add any newly completed components to components_completed
+- Add key design decisions made (colors, layout choices, libraries used) to design_decisions
+- List remaining work in next_steps
+- List any known TypeScript or build errors in known_issues
+- Keep intent unchanged`;
+
+        // Strip leading ToolMessages — OpenAI rejects a conversation that starts with a ToolMessage
+        const lastMsgs = currentMessages.slice(-5);
+        while (lastMsgs.length > 0 && lastMsgs[0]._getType?.() === "tool") {
+            lastMsgs.shift();
+        }
+
+        const memResponse = await openaiModel.invoke([
+            new SystemMessage(memUpdateSystemPrompt),
+            ...lastMsgs
+        ]);
+
+        const memRaw = memResponse.content as string;
+        console.log(`[DEV_MEMORY] Memory update response chars: ${memRaw.length} | contains <file> block: ${/<file[^>]*path=["']dev_memory\.json["']/.test(memRaw)}`);
+        const memMatch = memRaw.match(/<file[^>]*path=["']dev_memory\.json["'][^>]*>\n*([\s\S]*?)\n*<\/file>/i);
+        if (memMatch) {
+            await tools.writeFile(state.sandboxPath, "dev_memory.json", memMatch[1]);
+            const updatedMem = JSON.parse(memMatch[1]);
+            console.log(`[DEV_MEMORY] Written — components_completed: [${updatedMem.components_completed?.join(", ")}] | next_steps: ${updatedMem.next_steps?.length}`);
+            emitter.info("developer", "Session memory updated");
+        } else {
+            console.log(`[DEV_MEMORY] WARNING: No <file path="dev_memory.json"> block found in response. Raw response:\n${memRaw.slice(0, 300)}`);
+        }
+    } catch (e: any) {
+        console.log(`[DEV_MEMORY] ERROR during memory update: ${e.message}`);
+        emitter.info("developer", `Session memory update skipped: ${e.message}`);
+    }
+
     return {
         status: "qa",
         iterationCount: state.iterationCount + 1,
-        // Save the updated message history to global state
         messages: currentMessages
     };
 }
