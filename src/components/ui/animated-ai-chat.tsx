@@ -322,7 +322,7 @@ export function AnimatedAIChat() {
                             animate={{ opacity: 1 }}
                             transition={{ delay: 0.3 }}
                         >
-                            Type a command or ask a question
+                            Build your landing page with the help of mr. saadon
                         </motion.p>
                     </div>
 

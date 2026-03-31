@@ -109,11 +109,46 @@ export function useWebContainer() {
 
     }, [boot]);
 
+    /**
+     * Lightweight file update for edits — just writes changed files to the WebContainer.
+     * Vite HMR picks up the changes automatically, no reinstall or server restart needed.
+     */
+    const updateFiles = useCallback(async (files: Record<string, string>) => {
+        const instance = webcontainerInstance;
+        if (!instance) {
+            console.warn("WebContainer not booted, falling back to full mountAndRun");
+            return mountAndRun(files);
+        }
+
+        setLogs(prev => [...prev, "> Updating files..."]);
+
+        // Write each file individually to trigger Vite HMR
+        for (const [filePath, contents] of Object.entries(files)) {
+            const cleanPath = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+            const parts = cleanPath.split('/');
+
+            // Ensure parent directories exist
+            if (parts.length > 1) {
+                const dirPath = parts.slice(0, -1).join('/');
+                try {
+                    await instance.fs.mkdir(dirPath, { recursive: true });
+                } catch {
+                    // Directory may already exist
+                }
+            }
+
+            await instance.fs.writeFile(cleanPath, contents);
+        }
+
+        setLogs(prev => [...prev, `> ${Object.keys(files).length} files updated. HMR reloading...`]);
+    }, [mountAndRun]);
+
     return {
         boot,
         isBooted,
         installing,
         mountAndRun,
+        updateFiles,
         devServerUrl,
         webLogs: logs
     };

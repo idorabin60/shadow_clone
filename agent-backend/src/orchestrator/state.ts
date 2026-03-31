@@ -32,3 +32,26 @@ export interface OrchestrationState {
      */
     iterationCount: number;
 }
+
+export interface EditState {
+    /** The sandbox path for the edit session */
+    sandboxPath: string;
+
+    /** Supabase project ID */
+    projectId: string;
+
+    /** The user's edit request (e.g., "change the hero background to blue") */
+    userRequest: string;
+
+    /** Conversation history for multi-turn edits */
+    messages: BaseMessage[];
+
+    /** Current execution status */
+    status: string;
+
+    /** The latest compiler/error logs */
+    errorLogs: string | null;
+
+    /** Counter to prevent infinite loops */
+    iterationCount: number;
+}

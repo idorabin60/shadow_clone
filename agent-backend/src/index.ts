@@ -9,25 +9,12 @@ if (typeof global.ReadableStream === 'undefined') {
 
 import { SandboxManager } from "./sandbox/SandboxManager";
 import { orchestratorApp } from "./orchestrator/graph";
+import { editApp } from "./orchestrator/editGraph";
 import { supabase } from "./db/supabase";
-import { AsyncLocalStorage } from "async_hooks";
+import { eventStorage, emitter } from "./orchestrator/emitter";
+import type { SSEEvent } from "./orchestrator/events";
 
 dotenv.config();
-
-// Fix concurrent console.log leak using AsyncLocalStorage
-const logStorage = new AsyncLocalStorage<(msg: string) => void>();
-const originalLog = console.log;
-
-console.log = (...args) => {
-    originalLog(...args);
-    const logger = logStorage.getStore();
-    if (logger) {
-        const str = args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' ');
-        if (str.includes('[') || str.includes('Error') || str.includes('Success')) {
-            logger(str);
-        }
-    }
-};
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -37,16 +24,16 @@ app.use(express.json());
 
 const sandboxManager = new SandboxManager();
 
-// Store active streams by uuid to push logs easily
+// Store active SSE streams by uuid
 const clients: { [key: string]: express.Response } = {};
 
 /**
- * Helper to emit SSE messages
+ * Send a structured SSE event to the connected client
  */
-function sendLog(uuid: string, msg: string) {
+function sendEvent(uuid: string, event: SSEEvent) {
     const client = clients[uuid];
     if (client) {
-        client.write(`data: ${JSON.stringify({ log: msg })}\n\n`);
+        client.write(`data: ${JSON.stringify(event)}\n\n`);
     }
 }
 
@@ -57,7 +44,7 @@ app.get("/health", (req, res) => {
 
 /**
  * 1. Orchestration SSE Endpoint
- * Triggers the graph and streams logs back to the frontend.
+ * Triggers the graph and streams structured events back to the frontend.
  */
 app.post("/api/orchestrate", async (req, res) => {
     const businessInput = req.body;
@@ -77,9 +64,7 @@ app.post("/api/orchestrate", async (req, res) => {
         // 3. Kick off LangGraph async
         (async () => {
             try {
-                // Keep the initial log out of storage or inside
-
-                logStorage.run((msg: string) => sendLog(sandboxId, msg), async () => {
+                eventStorage.run((event: SSEEvent) => sendEvent(sandboxId, event), async () => {
                     console.log(`[Job ${sandboxId}] Starting orchestrator...`);
 
                     const finalState = await orchestratorApp.invoke({
@@ -91,7 +76,7 @@ app.post("/api/orchestrate", async (req, res) => {
                         iterationCount: 0
                     });
 
-                    sendLog(sandboxId, "✅ Generation Complete! Saving files to database...");
+                    emitter.stepStart("saving");
 
                     // Phase 5: Extract Sandbox Files & Save to DB
                     try {
@@ -106,19 +91,20 @@ app.post("/api/orchestrate", async (req, res) => {
                             throw new Error(`DB Update Failed: ${error.message}`);
                         }
 
-                        sendLog(sandboxId, `🌐 Files Saved Successfully!`);
-                        sendLog(sandboxId, `✅ DONE_FILES_SAVED:${sandboxId}`);
+                        emitter.stepDone("saving");
+                        emitter.done(sandboxId);
 
                         // Clean up sandbox to save disk space now that it's in the DB
                         await sandboxManager.deleteSandbox(sandboxId);
                     } catch (dbErr: any) {
                         console.error(`[DB Error ${sandboxId}]`, dbErr);
-                        sendLog(sandboxId, `❌ Failed to save files: ${dbErr.message}`);
+                        emitter.stepFailed("saving", dbErr.message);
+                        emitter.error(`Failed to save files: ${dbErr.message}`, true);
                     }
-                }); // End AsyncLocalStorage scope
+                }); // End eventStorage scope
             } catch (err: any) {
                 console.error(`[Fatal Orchestrator Error] ${err.name}: ${err.message}`, err);
-                sendLog(sandboxId, `❌ Fatal API Error: ${err.message}`);
+                sendEvent(sandboxId, { type: "error", message: err.message, fatal: true });
             }
         })();
 
@@ -129,7 +115,88 @@ app.post("/api/orchestrate", async (req, res) => {
 });
 
 /**
- * 2. Logging Stream Endpoint (SSE)
+ * 2. Edit Endpoint
+ * Applies targeted edits to an existing project using the lightweight edit graph.
+ */
+app.post("/api/edit", async (req, res) => {
+    const { projectId, userRequest } = req.body;
+
+    if (!projectId || !userRequest) {
+        return res.status(400).json({ error: "Missing projectId or userRequest" });
+    }
+
+    try {
+        // 1. Fetch existing files from Supabase
+        const { data: project, error: dbError } = await supabase
+            .from('projects')
+            .select('files')
+            .eq('id', projectId)
+            .single();
+
+        if (dbError || !project?.files) {
+            return res.status(404).json({ error: "Project not found or has no files" });
+        }
+
+        // 2. Recreate sandbox from existing files
+        const { sandboxId, sandboxPath } = await sandboxManager.createFromFiles(projectId, project.files);
+
+        // 3. Return sandboxId so frontend can subscribe to SSE
+        res.json({ sandboxId, message: "Edit started" });
+
+        // 4. Run edit graph async
+        (async () => {
+            try {
+                eventStorage.run((event: SSEEvent) => sendEvent(sandboxId, event), async () => {
+                    console.log(`[Edit ${sandboxId}] Starting edit: "${userRequest.substring(0, 80)}..."`);
+
+                    await editApp.invoke({
+                        sandboxPath,
+                        projectId,
+                        userRequest,
+                        messages: [],
+                        status: "coding",
+                        errorLogs: null,
+                        iterationCount: 0
+                    });
+
+                    emitter.stepStart("saving");
+
+                    // Save updated files back to DB
+                    try {
+                        const updatedFiles = await sandboxManager.getSandboxFiles(sandboxId);
+                        console.log(`[Edit ${sandboxId}] Read ${Object.keys(updatedFiles).length} files. Updating DB for project ${projectId}...`);
+
+                        const { error } = await supabase
+                            .from('projects')
+                            .update({ files: updatedFiles })
+                            .eq('id', projectId);
+
+                        if (error) throw new Error(`DB Update Failed: ${error.message}`);
+
+                        emitter.stepDone("saving");
+                        emitter.done(projectId);
+
+                        await sandboxManager.deleteSandbox(sandboxId);
+                    } catch (dbErr: any) {
+                        console.error(`[DB Error ${sandboxId}]`, dbErr);
+                        emitter.stepFailed("saving", dbErr.message);
+                        emitter.error(`Failed to save files: ${dbErr.message}`, true);
+                    }
+                });
+            } catch (err: any) {
+                console.error(`[Fatal Edit Error] ${err.name}: ${err.message}`, err);
+                sendEvent(sandboxId, { type: "error", message: err.message, fatal: true });
+            }
+        })();
+
+    } catch (error: any) {
+        console.error("Edit init failed", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * 3. Logging Stream Endpoint (SSE)
  */
 app.get("/api/orchestrate/stream/:uuid", (req, res) => {
     const { uuid } = req.params;
@@ -141,8 +208,8 @@ app.get("/api/orchestrate/stream/:uuid", (req, res) => {
 
     clients[uuid] = res;
 
-    // Send initial connected payload
-    res.write(`data: ${JSON.stringify({ log: "System: Connected to Terminal Stream..." })}\n\n`);
+    // Send initial connected event
+    res.write(`data: ${JSON.stringify({ type: "connected" })}\n\n`);
 
     req.on('close', () => {
         delete clients[uuid];

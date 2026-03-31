@@ -80,6 +80,30 @@ export class SandboxManager {
     }
 
     /**
+     * Recreates a sandbox from existing project files (for edit sessions).
+     * Copies scaffold for config + node_modules, then writes all project files on top.
+     */
+    public async createFromFiles(
+        projectId: string,
+        files: Record<string, string>
+    ): Promise<{ sandboxId: string; sandboxPath: string }> {
+        // Create a fresh sandbox with scaffold
+        const { sandboxId, sandboxPath } = await this.createSandbox(projectId);
+
+        // Write all project files into the sandbox
+        for (const [filePath, content] of Object.entries(files)) {
+            // filePath comes from DB as "/src/App.tsx" — strip leading slash
+            const relativePath = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+            const fullPath = path.join(sandboxPath, relativePath);
+            await fs.mkdir(path.dirname(fullPath), { recursive: true });
+            await fs.writeFile(fullPath, content, 'utf-8');
+        }
+
+        console.log(`[Sandbox] Recreated from files for ${projectId} (${Object.keys(files).length} files)`);
+        return { sandboxId, sandboxPath };
+    }
+
+    /**
      * Reads all code files in the sandbox into a flat Sandpack-compatible object
      */
     public async getSandboxFiles(sandboxId: string): Promise<Record<string, string>> {

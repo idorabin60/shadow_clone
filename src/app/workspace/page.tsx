@@ -1,34 +1,120 @@
 "use client"
-import { useState, useEffect, Suspense, useRef } from "react";
+import { useState, useEffect, Suspense, useRef, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Sparkles, ArrowRight, CornerDownLeft, Monitor, Smartphone, Tablet, ArrowUp, Folder } from "lucide-react";
-import type { BusinessInput } from "@/lib/ai/prompts";
+import { Sparkles, Monitor, Smartphone, Tablet, ArrowUp, Folder, ChevronLeft, Eye, Loader2 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import { useWebContainer } from "@/hooks/useWebContainer";
+import { AgentStepper } from "@/components/stepper/AgentStepper";
+import type { SSEEvent, StepState } from "@/types/events";
+import { CREATE_STEPS, EDIT_STEPS } from "@/types/events";
+
+interface BusinessInput {
+    businessName: string;
+    businessType: string;
+    description: string;
+    uniqueSellingProposition?: string;
+    services: string[];
+    tone?: "professional" | "friendly" | "luxury" | "casual";
+}
+
+interface ChatMessage {
+    role: "user" | "agent";
+    content: string;
+    timestamp: Date;
+}
 
 function WorkspaceContent() {
     const searchParams = useSearchParams();
     const router = useRouter();
-
     const initialPrompt = searchParams.get("prompt") || "";
 
-    // State for the agent process
     const [isLoading, setIsLoading] = useState(false);
-    const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
     const [sandboxId, setSandboxId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const { mountAndRun, updateFiles, devServerUrl, webLogs } = useWebContainer();
 
-    // WebContainer Execution
-    const { mountAndRun, devServerUrl, webLogs } = useWebContainer();
-
-    // State for the UI
     const [chatInput, setChatInput] = useState("");
     const [deviceMode, setDeviceMode] = useState<"desktop" | "tablet" | "mobile">("desktop");
     const hasStartedInitialGen = useRef(false);
+    const chatEndRef = useRef<HTMLDivElement>(null);
+    const [showProjectSwitcher, setShowProjectSwitcher] = useState(false);
+    const [steps, setSteps] = useState<StepState[]>([]);
 
-    // Supabase variables
     const supabase = createClient();
     const [projects, setProjects] = useState<any[]>([]);
+
+    const initSteps = useCallback((templates: { id: StepState["id"]; label: string }[]): StepState[] => {
+        return templates.map((t) => ({
+            id: t.id,
+            label: t.label,
+            status: "pending" as const,
+            files: [],
+        }));
+    }, []);
+
+    const reduceEvent = useCallback((event: SSEEvent) => {
+        setSteps((prev) => {
+            const next = prev.map((s) => ({ ...s }));
+            switch (event.type) {
+                case "step_start": {
+                    const s = next.find((x) => x.id === event.step);
+                    if (s) {
+                        s.status = "active";
+                        s.startedAt = Date.now();
+                        s.duration = undefined;
+                        if (event.iteration != null) s.iteration = event.iteration;
+                    }
+                    return next;
+                }
+                case "step_done": {
+                    const s = next.find((x) => x.id === event.step);
+                    if (s) {
+                        s.status = "done";
+                        if (s.startedAt) s.duration = Date.now() - s.startedAt;
+                    }
+                    return next;
+                }
+                case "step_failed": {
+                    const s = next.find((x) => x.id === event.step);
+                    if (s) {
+                        s.status = "failed";
+                        s.message = event.message;
+                        if (s.startedAt) s.duration = Date.now() - s.startedAt;
+                    }
+                    return next;
+                }
+                case "file_activity": {
+                    const s = next.find((x) => x.id === event.step);
+                    if (s && !s.files.includes(event.filePath)) {
+                        s.files = [...s.files, event.filePath];
+                    }
+                    return next;
+                }
+                case "score": {
+                    const s = next.find((x) => x.id === "qa_visual");
+                    if (s) s.score = { value: event.score, passed: event.passed };
+                    return next;
+                }
+                case "iteration_start": {
+                    // Reset QA steps to pending for a new iteration
+                    for (const s of next) {
+                        if (["qa_ts", "qa_build", "qa_visual", "developer"].includes(s.id)) {
+                            s.status = "pending";
+                            s.startedAt = undefined;
+                            s.duration = undefined;
+                            s.message = undefined;
+                            s.files = [];
+                        }
+                    }
+                    return next;
+                }
+                default:
+                    return prev;
+            }
+        });
+    }, []);
+
+    const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 
     useEffect(() => {
         const fetchProjects = async () => {
@@ -45,47 +131,93 @@ function WorkspaceContent() {
         fetchProjects();
     }, []);
 
-    // Start the initial generation when the page loads with a prompt
+    // Auto-scroll chat
+    useEffect(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [chatMessages, steps]);
+
     useEffect(() => {
         if (initialPrompt && !hasStartedInitialGen.current) {
             hasStartedInitialGen.current = true;
 
+            // Always show the initial prompt as a user message
+            setChatMessages([{ role: "user", content: initialPrompt, timestamp: new Date() }]);
+
+            // Check cache — try to reload from Supabase if cached
             const cachedData = localStorage.getItem(`shadow_clone_gen_${initialPrompt}`);
             if (cachedData) {
                 try {
                     const parsed = JSON.parse(cachedData);
-                    if (parsed.hasFiles) {
+                    if (parsed.hasFiles && parsed.sandboxId) {
                         setSandboxId(parsed.sandboxId);
-                        setTerminalLogs(parsed.terminalLogs || [`> Loaded cached generation for: "${initialPrompt}"`]);
-                        // Would need to fetch files here to mount again, skipping cache optimization for WebContainers right now
+                        // Reload files from DB into WebContainer
+                        (async () => {
+                            const { data: projData } = await supabase.from('projects').select('files').eq('id', parsed.sandboxId).single();
+                            if (projData?.files) {
+                                setChatMessages(prev => [...prev, { role: "agent", content: "טוען פרויקט קיים...", timestamp: new Date() }]);
+                                await mountAndRun(projData.files);
+                                setChatMessages(prev => [...prev, { role: "agent", content: "הדף נטען בהצלחה!", timestamp: new Date() }]);
+                            } else {
+                                // Cached entry is stale, regenerate
+                                localStorage.removeItem(`shadow_clone_gen_${initialPrompt}`);
+                                generateLandingPage(initialPrompt);
+                            }
+                        })();
                         return;
                     }
                 } catch (e) {
                     console.error("Failed to parse cached data", e);
                 }
             }
-
             generateLandingPage(initialPrompt);
         }
     }, [initialPrompt, hasStartedInitialGen]);
 
-    // Save generation to localStorage once it's complete
     useEffect(() => {
         if (devServerUrl && initialPrompt && sandboxId) {
             localStorage.setItem(`shadow_clone_gen_${initialPrompt}`, JSON.stringify({
                 hasFiles: true,
                 sandboxId,
-                terminalLogs
             }));
         }
-    }, [devServerUrl, initialPrompt, sandboxId, terminalLogs]);
+    }, [devServerUrl, initialPrompt, sandboxId]);
+
+    const subscribeSSE = useCallback((sseUrl: string, onDone: (projectId: string) => void) => {
+        const eventSource = new EventSource(sseUrl);
+
+        eventSource.onmessage = (event) => {
+            try {
+                const data: SSEEvent = JSON.parse(event.data);
+                reduceEvent(data);
+
+                if (data.type === "done") {
+                    onDone(data.projectId);
+                    eventSource.close();
+                } else if (data.type === "error" && data.fatal) {
+                    eventSource.close();
+                    setIsLoading(false);
+                    setError("הסוכן נתקל בשגיאה: " + data.message);
+                }
+            } catch (e) {
+                console.error("SSE Parse error:", e);
+            }
+        };
+
+        eventSource.onerror = () => {
+            eventSource.close();
+            setIsLoading(false);
+            setError("נותק קשר משרת הסוכנים.");
+        };
+
+        return eventSource;
+    }, [reduceEvent]);
 
     const generateLandingPage = async (text: string) => {
         if (!text.trim()) return;
 
         setIsLoading(true);
         setError(null);
-        setTerminalLogs([`> Starting generation for: "${text}"...`]);
+        setSteps(initSteps(CREATE_STEPS));
 
         const inputData: BusinessInput = {
             businessName: "העסק שלי",
@@ -108,7 +240,6 @@ function WorkspaceContent() {
                     .single();
                 if (data) {
                     newProjectId = data.id;
-                    // Optimistically add to list
                     setProjects(prev => [{ ...data, created_at: new Date().toISOString() }, ...prev]);
                 }
             }
@@ -126,41 +257,20 @@ function WorkspaceContent() {
             const { sandboxId: newSandboxId } = await response.json();
             setSandboxId(newSandboxId);
 
-            const eventSource = new EventSource(`http://localhost:4000/api/orchestrate/stream/${newSandboxId}`);
-
-            eventSource.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    setTerminalLogs((prev) => [...prev, data.log]);
-
-                    if (data.log.includes("✅ DONE_FILES_SAVED:")) {
-                        const savedId = data.log.split(":")[1].trim();
-                        // Fetch the files from Supabase now!
-                        // In an async IIFE to avoid making the whole onmessage async
-                        (async () => {
-                            const { data: projData } = await supabase.from('projects').select('files').eq('id', savedId).single();
-                            if (projData?.files) {
-                                // WebContainers require no package.json hacking, just run it!
-                                await mountAndRun(projData.files);
-                            }
-                            eventSource.close();
-                            setIsLoading(false);
-                        })();
-                    } else if (data.log.includes("❌ Fatal Error")) {
-                        eventSource.close();
-                        setIsLoading(false);
-                        setError("הסוכן נתקל בשגיאה: " + data.log);
+            subscribeSSE(
+                `http://localhost:4000/api/orchestrate/stream/${newSandboxId}`,
+                async (projectId) => {
+                    const { data: projData } = await supabase.from('projects').select('files').eq('id', projectId).single();
+                    if (projData?.files) {
+                        await mountAndRun(projData.files);
                     }
-                } catch (e) {
-                    console.error("SSE Parse error:", e);
+                    setIsLoading(false);
+                    setChatMessages(prev => [
+                        ...prev,
+                        { role: "agent", content: "הדף נוצר בהצלחה! אפשר לראות את התצוגה המקדימה בצד שמאל.", timestamp: new Date() }
+                    ]);
                 }
-            };
-
-            eventSource.onerror = () => {
-                eventSource.close();
-                setIsLoading(false);
-                setError("נותק קשר משרת הסוכנים.");
-            };
+            );
 
         } catch (err: any) {
             console.error(err);
@@ -169,131 +279,168 @@ function WorkspaceContent() {
         }
     };
 
-    const handleSendMessage = () => {
-        if (!chatInput.trim()) return;
-
-        // Add the user's message to the logs as a visual indication
-        setTerminalLogs(prev => [...prev, `[User]: ${chatInput}`]);
-
-        // TODO: Implement actual follow-up backend logic here
-        setTerminalLogs(prev => [...prev, `> [Agent]: אני מעבד את הבקשה שלך... (Logic pending)`]);
-
+    const handleSendMessage = async () => {
+        if (!chatInput.trim() || isLoading || !sandboxId) return;
+        const userMessage = chatInput;
         setChatInput("");
+        setChatMessages(prev => [...prev, { role: "user", content: userMessage, timestamp: new Date() }]);
+
+        setIsLoading(true);
+        setError(null);
+        setSteps(initSteps(EDIT_STEPS));
+
+        try {
+            const response = await fetch("http://localhost:4000/api/edit", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ projectId: sandboxId, userRequest: userMessage }),
+            });
+
+            if (!response.ok) throw new Error("שגיאה בתקשורת מול השרת.");
+
+            const { sandboxId: editSandboxId } = await response.json();
+
+            subscribeSSE(
+                `http://localhost:4000/api/orchestrate/stream/${editSandboxId}`,
+                async (projectId) => {
+                    const { data: projData } = await supabase.from('projects').select('files').eq('id', projectId).single();
+                    if (projData?.files) {
+                        await updateFiles(projData.files);
+                    }
+                    setIsLoading(false);
+                    setChatMessages(prev => [
+                        ...prev,
+                        { role: "agent", content: "השינויים בוצעו בהצלחה! התצוגה עודכנה.", timestamp: new Date() }
+                    ]);
+                }
+            );
+        } catch (err: any) {
+            console.error(err);
+            setError(err.message);
+            setIsLoading(false);
+        }
     };
 
     return (
-        <div className="flex h-screen w-full bg-[#0A0A0A] text-white overflow-hidden text-right" dir="rtl">
+        <div className="flex h-screen w-full bg-[#0A0A0A] text-white overflow-hidden" dir="rtl">
 
-            {/* LEFT SIDEBAR: Chat / Logs */}
-            <div className="w-[400px] lg:w-[450px] shrink-0 border-l border-white/10 flex flex-col bg-[#0F0F0F] relative z-20 shadow-2xl">
+            {/* CHAT PANEL */}
+            <div className="w-[420px] lg:w-[480px] shrink-0 border-l border-white/[0.06] flex flex-col bg-[#0A0A0A]">
 
-                {/* Sidebar Header */}
-                <div className="h-14 shrink-0 flex items-center justify-between px-4 border-b border-white/5 bg-[#141414]">
+                {/* Header */}
+                <div className="h-12 shrink-0 flex items-center justify-between px-4 border-b border-white/[0.06]">
                     <button
                         onClick={() => router.push('/')}
-                        className="text-zinc-400 hover:text-white transition-colors flex items-center gap-2 text-sm"
+                        className="text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1.5 text-sm"
                     >
-                        <ArrowRight className="w-4 h-4" />
-                        חזור לבית
+                        <ChevronLeft className="w-4 h-4" />
                     </button>
-                    <div className="flex items-center gap-2 font-semibold">
-                        <Sparkles className="w-4 h-4 text-zinc-400" />
+                    <div className="flex items-center gap-2 text-sm font-medium text-zinc-300">
+                        <Sparkles className="w-3.5 h-3.5 text-zinc-500" />
                         shadow clone
                     </div>
-                </div>
-
-                {/* Project Switcher */}
-                {projects.length > 0 && (
-                    <div className="border-b border-white/5 bg-[#0F0F0F] p-4 flex flex-col gap-2 shrink-0 max-h-[150px] overflow-y-auto">
-                        <div className="text-xs text-zinc-500 font-medium mb-1">הפרויקטים שלי</div>
-                        {projects.map((proj) => (
+                    {projects.length > 0 && (
+                        <div className="relative">
                             <button
-                                key={proj.id}
-                                onClick={async () => {
-                                    setSandboxId(proj.id);
-                                    setTerminalLogs([`> Switched to project: ${proj.name}`, `> Fetching source files...`]);
-
-                                    const { data: dbData } = await supabase.from('projects').select('files').eq('id', proj.id).single();
-                                    if (dbData?.files) {
-                                        await mountAndRun(dbData.files);
-                                        setTerminalLogs(prev => [...prev, `> Booting WebContainer environment...`]);
-                                    } else {
-                                        setTerminalLogs(prev => [...prev, `> ❌ No files found for this project.`]);
-                                    }
-                                }}
-                                className={`text-right text-sm truncate px-3 py-2 rounded-lg flex items-center gap-2 transition-colors ${sandboxId === proj.id
-                                    ? "bg-zinc-800 text-white"
-                                    : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
-                                    }`}
+                                onClick={() => setShowProjectSwitcher(!showProjectSwitcher)}
+                                className="text-zinc-500 hover:text-zinc-300 transition-colors"
                             >
-                                <Folder className="w-4 h-4 shrink-0 text-zinc-500" />
-                                {proj.name}
+                                <Folder className="w-4 h-4" />
                             </button>
-                        ))}
-                    </div>
-                )}
-
-                {/* Chat/Log Area */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-
-                    {/* Initial User Prompt Bubble */}
-                    <div className="flex flex-col gap-1 items-start">
-                        <div className="text-xs text-zinc-500 mr-2">אתה</div>
-                        <div className="bg-zinc-800/80 rounded-2xl rounded-tr-sm px-4 py-3 text-sm max-w-[90%] border border-white/5 whitespace-pre-wrap">
-                            {initialPrompt}
-                        </div>
-                    </div>
-
-                    {/* Agent Streaming Logs */}
-                    <div className="flex flex-col gap-1 items-start mt-4">
-                        <div className="text-xs text-zinc-500 mr-2 flex items-center gap-2">
-                            <Sparkles className="w-3 h-3 text-blue-400" />
-                            סוכן פיתוח
-                            {isLoading && <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" /></span>}
-                        </div>
-                        <div className="w-full bg-[#0A0A0A] border border-white/5 rounded-xl p-3 font-mono text-xs overflow-hidden shadow-inner flex flex-col gap-2">
-                            {terminalLogs.length === 0 && <span className="text-zinc-600">ממתין להתחברות...</span>}
-                            {terminalLogs.map((log, i) => {
-                                const isUserLog = log.startsWith("[User]:");
-                                if (isUserLog) return null; // We handle user messages visually differently if needed, but for now just showing agent logs here mostly.
-
-                                return (
-                                    <div key={i} className="text-zinc-400 break-words leading-relaxed">
-                                        <span className={
-                                            log.includes("❌") ? "text-red-400" :
-                                                log.includes("✅") ? "text-green-400" :
-                                                    log.includes("👨‍💻") ? "text-blue-400" :
-                                                        log.includes(">") ? "text-purple-400" :
-                                                            "text-zinc-300"
-                                        }>
-                                            {log}
-                                        </span>
-                                    </div>
-                                );
-                            })}
-                            {error && (
-                                <div className="text-red-400 mt-2 p-2 bg-red-500/10 border border-red-500/20 rounded-md">
-                                    {error}
+                            {showProjectSwitcher && (
+                                <div className="absolute left-0 top-8 w-64 bg-[#141414] border border-white/[0.08] rounded-xl shadow-2xl z-50 py-2 max-h-[300px] overflow-y-auto">
+                                    <div className="px-3 py-1.5 text-[11px] text-zinc-600 font-medium">פרויקטים</div>
+                                    {projects.map((proj) => (
+                                        <button
+                                            key={proj.id}
+                                            onClick={async () => {
+                                                setShowProjectSwitcher(false);
+                                                setSandboxId(proj.id);
+                                                setSteps([]);
+                                                setChatMessages([{ role: "agent", content: `טוען פרויקט: ${proj.name}`, timestamp: new Date() }]);
+                                                const { data: dbData } = await supabase.from('projects').select('files').eq('id', proj.id).single();
+                                                if (dbData?.files) {
+                                                    await mountAndRun(dbData.files);
+                                                    setChatMessages(prev => [...prev, { role: "agent", content: "הפרויקט נטען בהצלחה!", timestamp: new Date() }]);
+                                                }
+                                            }}
+                                            className={`w-full text-right px-3 py-2 text-sm truncate hover:bg-white/[0.04] transition-colors flex items-center gap-2 ${sandboxId === proj.id ? "text-white" : "text-zinc-400"}`}
+                                        >
+                                            <Folder className="w-3.5 h-3.5 shrink-0 text-zinc-600" />
+                                            <span className="truncate">{proj.name}</span>
+                                        </button>
+                                    ))}
                                 </div>
                             )}
                         </div>
-                    </div>
-
-                    Iterative Prompt History Simulation
-                    {terminalLogs.filter(log => log.startsWith("[User]:")).map((log, idx) => (
-                        <div key={idx} className="flex flex-col gap-1 items-start mt-4">
-                            <div className="text-xs text-zinc-500 mr-2">אתה</div>
-                            <div className="bg-zinc-800/80 rounded-2xl rounded-tr-sm px-4 py-3 text-sm max-w-[90%] border border-white/5 whitespace-pre-wrap">
-                                {log.replace("[User]: ", "")}
-                            </div>
-                        </div>
-                    ))}
-
+                    )}
                 </div>
 
-                {/* Chat Input Box (Footer) */}
-                <div className="p-4 bg-[#141414] border-t border-white/5 shrink-0">
-                    <div className="relative bg-[#0A0A0A] border border-white/10 rounded-xl flex items-center p-1 focus-within:border-zinc-500 transition-colors shadow-inner">
+                {/* Chat Messages */}
+                <div className="flex-1 overflow-y-auto">
+                    <div className="p-5 space-y-6">
+
+                        {/* Render chat messages */}
+                        {chatMessages.map((msg, i) => (
+                            <div key={i}>
+                                {msg.role === "user" ? (
+                                    <div className="flex items-start gap-3">
+                                        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center shrink-0 mt-0.5">
+                                            <span className="text-[10px] font-bold text-white">א</span>
+                                        </div>
+                                        <div>
+                                            <div className="text-[11px] text-zinc-500 mb-1">אתה</div>
+                                            <div className="text-[13px] text-zinc-200 leading-relaxed whitespace-pre-wrap">
+                                                {msg.content}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="flex items-start gap-3">
+                                        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center shrink-0 mt-0.5 border border-white/[0.06]">
+                                            <Sparkles className="w-3 h-3 text-zinc-400" />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-[11px] text-zinc-500 mb-1">shadow clone</div>
+                                            <div className="text-[13px] text-zinc-300 leading-relaxed">
+                                                {msg.content}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+
+                        {/* Active generation — stepper */}
+                        {isLoading && steps.length > 0 && (
+                            <div className="flex items-start gap-3">
+                                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center shrink-0 mt-0.5 border border-white/[0.06]">
+                                    <Sparkles className="w-3 h-3 text-zinc-400" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-[11px] text-zinc-500 mb-2">shadow clone</div>
+                                    <AgentStepper steps={steps} />
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Error display */}
+                        {error && (
+                            <div className="flex items-start gap-3">
+                                <div className="w-7 h-7 rounded-full bg-red-500/10 flex items-center justify-center shrink-0 mt-0.5 border border-red-500/20">
+                                    <span className="text-red-400 text-xs">!</span>
+                                </div>
+                                <div className="text-[13px] text-red-400/90 leading-relaxed">{error}</div>
+                            </div>
+                        )}
+
+                        <div ref={chatEndRef} />
+                    </div>
+                </div>
+
+                {/* Input */}
+                <div className="p-3 shrink-0">
+                    <div className="bg-[#141414] border border-white/[0.06] rounded-xl flex items-end p-1.5 focus-within:border-white/[0.12] transition-colors">
                         <textarea
                             value={chatInput}
                             onChange={(e) => setChatInput(e.target.value)}
@@ -303,89 +450,86 @@ function WorkspaceContent() {
                                     handleSendMessage();
                                 }
                             }}
-                            placeholder="איך להמשיך מכאן?"
-                            className="w-full bg-transparent border-none outline-none text-sm p-3 resize-none h-[44px] text-white placeholder-zinc-600"
+                            placeholder="שאל את shadow clone..."
+                            rows={1}
+                            className="w-full bg-transparent border-none outline-none text-[13px] px-3 py-2 resize-none text-white placeholder-zinc-600 min-h-[36px] max-h-[120px]"
                             disabled={isLoading}
                         />
                         <button
                             onClick={handleSendMessage}
                             disabled={!chatInput.trim() || isLoading}
-                            className="w-8 h-8 rounded-lg bg-zinc-800 text-white flex items-center justify-center disabled:opacity-50 hover:bg-zinc-700 transition-colors mx-1"
+                            className="w-8 h-8 rounded-lg bg-white/[0.06] text-zinc-400 flex items-center justify-center disabled:opacity-30 hover:bg-white/[0.1] hover:text-white transition-all shrink-0"
                         >
                             <ArrowUp className="w-4 h-4" />
                         </button>
                     </div>
-                    <div className="text-center mt-2">
-                        <span className="text-[10px] text-zinc-600">shadow clone v1.0.0</span>
-                    </div>
                 </div>
             </div>
 
-            {/* RIGHT MAIN AREA: Preview Canvas */}
-            <div className="flex-1 flex flex-col bg-zinc-950 relative overflow-hidden">
+            {/* PREVIEW PANEL */}
+            <div className="flex-1 flex flex-col bg-[#0E0E0E] relative overflow-hidden">
 
-                {/* Subtle background texture for the canvas area */}
-                <div className="absolute inset-0 bg-[linear-gradient(to_right,#ffffff02_1px,transparent_1px),linear-gradient(to_bottom,#ffffff02_1px,transparent_1px)] bg-[size:2rem_2rem] pointer-events-none" />
-
-                {/* Preview Header / Device Toolbar */}
-                <div className="h-14 shrink-0 flex items-center justify-center px-4 border-b border-white/5 bg-[#0F0F0F]/80 backdrop-blur-md relative z-10">
-                    <div className="flex items-center gap-1 bg-zinc-900 border border-white/5 p-1 rounded-lg">
-                        <button onClick={() => setDeviceMode("desktop")} className={`p-1.5 rounded-md transition-colors ${deviceMode === "desktop" ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300"}`} title="Desktop">
-                            <Monitor className="w-4 h-4" />
-                        </button>
-                        <button onClick={() => setDeviceMode("tablet")} className={`p-1.5 rounded-md transition-colors ${deviceMode === "tablet" ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300"}`} title="Tablet">
-                            <Tablet className="w-4 h-4" />
-                        </button>
-                        <button onClick={() => setDeviceMode("mobile")} className={`p-1.5 rounded-md transition-colors ${deviceMode === "mobile" ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300"}`} title="Mobile">
-                            <Smartphone className="w-4 h-4" />
+                {/* Preview Toolbar */}
+                <div className="h-12 shrink-0 flex items-center justify-between px-4 border-b border-white/[0.06]">
+                    <div className="flex items-center gap-1">
+                        <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.06] text-[12px] text-zinc-200 font-medium">
+                            <Eye className="w-3.5 h-3.5" />
+                            Preview
                         </button>
                     </div>
+
+                    <div className="flex items-center gap-0.5 bg-white/[0.03] border border-white/[0.06] p-0.5 rounded-lg">
+                        <button onClick={() => setDeviceMode("desktop")} className={`p-1.5 rounded-md transition-all ${deviceMode === "desktop" ? "bg-white/[0.08] text-zinc-200" : "text-zinc-600 hover:text-zinc-400"}`}>
+                            <Monitor className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => setDeviceMode("tablet")} className={`p-1.5 rounded-md transition-all ${deviceMode === "tablet" ? "bg-white/[0.08] text-zinc-200" : "text-zinc-600 hover:text-zinc-400"}`}>
+                            <Tablet className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => setDeviceMode("mobile")} className={`p-1.5 rounded-md transition-all ${deviceMode === "mobile" ? "bg-white/[0.08] text-zinc-200" : "text-zinc-600 hover:text-zinc-400"}`}>
+                            <Smartphone className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+
+                    <div className="w-20" />
                 </div>
 
-                {/* Scaled Preview Canvas Wrapper */}
-                <div className="flex-1 flex items-center justify-center p-4 overflow-y-auto relative z-10" dir="ltr">
+                {/* Preview Content */}
+                <div className="flex-1 flex items-center justify-center p-4 overflow-hidden relative" dir="ltr">
                     {devServerUrl ? (
                         <div
-                            className={`bg-white rounded-xl overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-white/10 transition-all duration-300 ease-in-out`}
+                            className="bg-white rounded-lg overflow-hidden shadow-2xl transition-all duration-300 ease-in-out"
                             style={{
                                 width: deviceMode === "desktop" ? "100%" : deviceMode === "tablet" ? "768px" : "375px",
                                 height: deviceMode === "desktop" ? "100%" : deviceMode === "tablet" ? "1024px" : "812px",
                                 maxHeight: "100%"
                             }}
                         >
-                            <iframe src={devServerUrl} className="w-full h-full border-none" title="WebContainer Preview" allow="cross-origin-isolated" />
+                            <iframe src={devServerUrl} className="w-full h-full border-none" title="Preview" allow="cross-origin-isolated" />
                         </div>
                     ) : webLogs.length > 0 ? (
-                        <div className="flex flex-col items-center justify-center text-zinc-500 gap-4 w-full h-full p-8">
-                            <div className="w-full max-w-2xl bg-zinc-900 border border-white/10 rounded-xl p-4 font-mono text-xs overflow-hidden shadow-inner flex flex-col gap-2 min-h-[200px]">
-                                <h3 className="text-zinc-400 border-b border-white/5 pb-2 mb-2 flex items-center gap-2">
-                                    <Monitor className="w-4 h-4" /> WebContainer OS Boot Sequence
-                                </h3>
-                                {webLogs.map((log, i) => (
-                                    <div key={i} className="text-zinc-300 leading-relaxed font-mono">
-                                        {log}
-                                    </div>
+                        <div className="flex flex-col items-center justify-center gap-4 w-full max-w-lg">
+                            <Loader2 className="w-8 h-8 text-zinc-600 animate-spin" />
+                            <p className="text-sm text-zinc-500">מתקין חבילות ומקמפל...</p>
+                            <div className="w-full bg-[#141414] border border-white/[0.06] rounded-xl p-4 font-mono text-[11px] text-zinc-600 max-h-[200px] overflow-y-auto space-y-1">
+                                {webLogs.slice(-15).map((log, i) => (
+                                    <div key={i}>{log}</div>
                                 ))}
-                                <div className="mt-4 flex items-center gap-2 text-blue-400">
-                                    <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                                    <span>Installing dependencies and compiling...</span>
-                                </div>
                             </div>
                         </div>
                     ) : (
-                        <div className="flex flex-col items-center justify-center text-zinc-500 gap-4">
+                        <div className="flex flex-col items-center justify-center text-zinc-600 gap-3">
                             {isLoading ? (
                                 <>
                                     <div className="relative">
-                                        <div className="w-16 h-16 border-2 border-white/10 rounded-full"></div>
-                                        <div className="w-16 h-16 border-2 border-blue-500 rounded-full border-t-transparent animate-spin absolute inset-0"></div>
+                                        <div className="w-12 h-12 border border-white/[0.06] rounded-full" />
+                                        <div className="w-12 h-12 border border-violet-500/40 rounded-full border-t-transparent animate-spin absolute inset-0" />
                                     </div>
-                                    <p className="text-lg font-medium tracking-wide">מייצר אתר בבינה מלאכותית...</p>
+                                    <p className="text-sm text-zinc-500">מייצר את האתר שלך...</p>
                                 </>
                             ) : (
                                 <>
-                                    <Monitor className="w-12 h-12 opacity-20" />
-                                    <p>התצוגה המקדימה תופיע כאן בסיום התהליך.</p>
+                                    <Monitor className="w-10 h-10 opacity-20" />
+                                    <p className="text-sm text-zinc-600">התצוגה המקדימה תופיע כאן</p>
                                 </>
                             )}
                         </div>
@@ -398,7 +542,7 @@ function WorkspaceContent() {
 
 export default function WorkspacePage() {
     return (
-        <Suspense fallback={<div className="h-screen w-full bg-[#0A0A0A] flex items-center justify-center"><div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin" /></div>}>
+        <Suspense fallback={<div className="h-screen w-full bg-[#0A0A0A] flex items-center justify-center"><Loader2 className="w-6 h-6 text-zinc-600 animate-spin" /></div>}>
             <WorkspaceContent />
         </Suspense>
     )

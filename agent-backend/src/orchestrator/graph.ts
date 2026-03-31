@@ -5,7 +5,10 @@ import { SystemMessage, HumanMessage, ToolMessage } from "@langchain/core/messag
 import { tools } from "../tools";
 import { takeScreenshots, runVisualReview, formatVisualErrors } from "../tools";
 import { OrchestrationState } from "./state";
+import { emitter } from "./emitter";
 import { setMaxListeners } from "events";
+import { tool } from "@langchain/core/tools";
+import { z } from "zod";
 import dotenv from 'dotenv';
 dotenv.config();
 setMaxListeners(50);
@@ -49,7 +52,7 @@ const qaModel = openaiModel;
  * Reads the business input, writes a comprehensive spec.md to the sandbox.
  */
 async function productManagerNode(state: OrchestrationState): Promise<Partial<OrchestrationState>> {
-    console.log("👔 [Product Manager] Analyzing requirements and writing spec...");
+    emitter.stepStart("pm");
 
     const systemPrompt = `You are a world-class UI/UX Designer and "Vibe Architect" for a premium Hebrew landing page builder.
 Your job is to read the client instructions and write a detailed technical spec.md to the codebase.
@@ -68,17 +71,11 @@ ${JSON.stringify(state.businessInput, null, 2)}
 
 Write the exact content of the spec.md wrapped in a markdown code block.`;
 
-    console.log(`[Model] Product Manager using: ${process.env.ANTHROPIC_API_KEY ? "Anthropic claude-sonnet-4-6" : "OpenAI (GPT-4o)"}`);
-
     const response = await pmModel.invoke([
         new SystemMessage(systemPrompt),
         new HumanMessage("Please generate the technical spec.md using my exact business details and the strictest Dribbble/Awwwards Vibe rules."),
         ...state.messages
     ]);
-
-    // Add debug log to verify which model ACTUALLY served the request
-    const actualModelName = response.response_metadata?.model || response.response_metadata?.model_name || "Unknown LLM Model";
-    console.log(`   └─ 🔌 [Runtime Verification] Product Manager successfully responded using model: ${actualModelName}`);
 
     // Extract text inside ```md or just use raw text
     let specContent = response.content as string;
@@ -102,21 +99,21 @@ Write the exact content of the spec.md wrapped in a markdown code block.`;
     };
     await tools.writeFile(state.sandboxPath, "project_manifest.json", JSON.stringify(initialManifest, null, 2));
 
+    emitter.stepDone("pm");
+
     return {
         status: "coding",
         messages: state.messages
     };
 }
 
-import { tool } from "@langchain/core/tools";
-import { z } from "zod";
 
 /**
  * Node 2: Developer
  * Reads spec.md, uses a ReAct Tool Loop to iteratively write React code and run commands.
  */
 async function developerNode(state: OrchestrationState): Promise<Partial<OrchestrationState>> {
-    console.log(`👨‍💻 [Developer] Starting Coding Session... (Overall QA Iteration ${state.iterationCount})`);
+    emitter.stepStart("developer", state.iterationCount);
     // we use this spec?
     const spec = await tools.readFile(state.sandboxPath, "spec.md");
     const errorContext = state.errorLogs
@@ -181,7 +178,7 @@ ${errorContext}`;
     // Define Langchain Tools natively inside the node scope so they have access to state.sandboxPath
     const applyPatchsetTool = tool(
         async ({ operations }) => {
-            console.log(`   └─ 🛠️ Tool Invoked: apply_patchset [${operations.length} operations]`);
+            emitter.toolInvoked("developer", `apply_patchset [${operations.length} ops]`);
 
             for (const op of operations) {
                 // Guard 1: Component Naming
@@ -218,7 +215,7 @@ ${errorContext}`;
 
     const writeFileTool = tool(
         async ({ relativeFilePath, content }) => {
-            console.log(`   └─ ⚠️ [DEPRECATED] 🛠️ Tool Invoked: write_file (${relativeFilePath}) - Suggest XML <file>`);
+            emitter.fileActivity("developer", relativeFilePath, "created");
             if (relativeFilePath.endsWith("Navigation.tsx")) {
                 return "Error: Navigation component MUST be named 'Navbar.tsx'. Do not create 'Navigation.tsx'.";
             }
@@ -241,7 +238,7 @@ ${errorContext}`;
 
     const editFileTool = tool(
         async ({ relativeFilePath, find, replace }) => {
-            console.log(`   └─ ⚠️ [DEPRECATED] 🛠️ Tool Invoked: edit_file (${relativeFilePath}) - Suggest XML <file> rewrite`);
+            emitter.fileActivity("developer", relativeFilePath, "modified");
             if (isProtected(relativeFilePath) && !shouldAllowProtectedWrite()) {
                 return `Error: Modification to scaffold file '${relativeFilePath}' is blocked unless strictly required by QA errors.`;
             }
@@ -261,7 +258,7 @@ ${errorContext}`;
 
     const readFileTool = tool(
         async ({ relativeFilePath }) => {
-            console.log(`   └─ 🛠️ Tool Invoked: read_file (${relativeFilePath})`);
+            emitter.fileActivity("developer", relativeFilePath, "read");
             if (relativeFilePath === "spec.md") {
                 specReadCount++;
                 if (specReadCount > 1) {
@@ -288,7 +285,7 @@ ${errorContext}`;
 
     const listFilesTool = tool(
         async ({ relativeDirPath }) => {
-            console.log(`   └─ 🛠️ Tool Invoked: list_files (${relativeDirPath || '.'})`);
+            emitter.toolInvoked("developer", "list_files");
             return await tools.listFiles(state.sandboxPath, relativeDirPath);
         },
         {
@@ -302,7 +299,7 @@ ${errorContext}`;
 
     const npmInstallTool = tool(
         async ({ packages }) => {
-            console.log(`   └─ 🛠️ Tool Invoked: npm_install (${packages.join(', ')})`);
+            emitter.toolInvoked("developer", "npm_install");
             const res = await tools.npmInstall(state.sandboxPath, packages);
             return res;
         },
@@ -338,8 +335,6 @@ ${errorContext}`;
     let maxSteps = 100;
     let steps = 0;
 
-    console.log(`[Model] Developer utilizing: ${process.env.ANTHROPIC_API_KEY ? "Anthropic (Claude 4.6 Opus)" : "OpenAI (GPT-4o)"}`);
-
     const trimMessages = (msgs: any[], max = 30) => {
         if (msgs.length <= max) return msgs;
         // Keep the first message (prompt constraint)
@@ -373,22 +368,15 @@ ${errorContext}`;
     // The Internal Agent Loop
     while (steps < maxSteps) {
         steps++;
-        console.log(`   └─ Developer Loop Step ${steps}...`);
+        emitter.info("developer", `Loop step ${steps}`);
 
         currentMessages = trimMessages(currentMessages, 80);
-        console.log(`   └─ ⌛ Model is thinking/generating code (this may take 30-60s for full patches)...`);
         const response = await invokeWithBackoff(modelWithTools, currentMessages);
-
-        // Add debug log to verify which model ACTUALLY served the request
-        const actualModelName = response.response_metadata?.model || response.response_metadata?.model_name || "Unknown LLM Model";
-        console.log(`   └─ 🔌 [Runtime Verification] Developer successfully responded using model: ${actualModelName}`);
 
         let didPatch = false;
         let xmlErrorMessages: HumanMessage[] = [];
 
         if (response.content && typeof response.content === "string" && response.content.trim().length > 0) {
-            console.log(`   └─ 🧠 LLM Thoughts: ${response.content.substring(0, 300).replace(/\n/g, " ")}...`);
-
             let cleanedContent = response.content;
 
             // XML Artifact Extraction Engine
@@ -397,11 +385,11 @@ ${errorContext}`;
             while ((match = fileRegex.exec(response.content)) !== null) {
                 const filePath = match[1];
                 const fileContent = match[2];
-                console.log(`   └─ 📝 XML Parser Extracted: ${filePath}`);
+                emitter.fileActivity("developer", filePath, "created");
 
                 // Guard 1: Component Naming
                 if (filePath.endsWith("Navigation.tsx")) {
-                    console.log(`   └─ ⚠️ Skipped XML: Navigation must be Navbar.tsx`);
+                    console.log("Skipped XML: Navigation must be Navbar.tsx");
                     xmlErrorMessages.push(new HumanMessage(`XML Error: Navigation component MUST be named 'Navbar.tsx'. Do not create 'Navigation.tsx'.`));
                     didPatch = true;
                     continue;
@@ -409,7 +397,7 @@ ${errorContext}`;
 
                 // Guard 2: Scaffold Lock
                 if (isProtected(filePath) && !shouldAllowProtectedWrite()) {
-                    console.log(`   └─ ⚠️ Skipped XML: Scaffold lock on ${filePath}`);
+                    console.log(`Skipped XML: Scaffold lock on ${filePath}`);
                     xmlErrorMessages.push(new HumanMessage(`XML Error: Modification to protected file '${filePath}' is blocked. Only touch src/ application files.`));
                     didPatch = true;
                     continue;
@@ -437,8 +425,7 @@ ${errorContext}`;
 
         if (response.tool_calls && response.tool_calls.length > 0) {
             for (const tCall of response.tool_calls) {
-                const argPreview = JSON.stringify(tCall.args || {}).substring(0, 150);
-                console.log(`   └─ 🤖 LLM requested tool: ${tCall.name} | args: ${argPreview}${argPreview.length >= 150 ? '...' : ''}`);
+                emitter.toolInvoked("developer", tCall.name);
 
                 const selectedTool = toolsByName[tCall.name];
                 let toolResult = "";
@@ -448,11 +435,11 @@ ${errorContext}`;
                         toolResult = await (selectedTool as any).invoke(tCall.args);
                     } catch (e: any) {
                         schemaErrorOccurred = true;
-                        console.log(`   └─ ❌ Zod/Langchain Validation Error on ${tCall.name}: ${e.message}`);
+                        console.log(`Zod/Langchain Validation Error on ${tCall.name}: ${e.message}`);
                         toolResult = `Error executing tool: ${e.message}`;
                     }
                 } else {
-                    console.log(`   └─ ❌ Unknown tool requested: ${tCall.name}`);
+                    console.log(`Unknown tool requested: ${tCall.name}`);
                     toolResult = `Error: Unknown tool ${tCall.name}`;
                 }
 
@@ -467,7 +454,7 @@ ${errorContext}`;
 
         // Break if NO tools called AND NO XML patches extracted
         if (!didPatch && (!response.tool_calls || response.tool_calls.length === 0)) {
-            console.log("   └─ Developer finished coding.");
+            emitter.stepDone("developer", state.iterationCount);
             break;
         }
 
@@ -481,24 +468,25 @@ ${errorContext}`;
 
         if (didPatch) {
             patchAttempts++;
-            console.log(`   └─ 🔎 Running Early TypeScript Verification (Attempt ${patchAttempts}/2)...`);
+            emitter.info("developer", `Running TypeScript verification (attempt ${patchAttempts}/2)`);
             const tsResult = await tools.runTypeScript(state.sandboxPath);
             if (!tsResult.includes("Success:")) {
-                console.log(`   └─ ❌ Early TS Verification Failed.`);
+                emitter.info("developer", "TypeScript verification failed, fixing...");
                 currentMessages.push(new HumanMessage(`Early TypeScript TypeCheck failed after your XML patch:\n${tsResult}\n\nPlease output <file> blocks to fix these errors.`));
                 if (patchAttempts >= 2) {
-                    console.log(`   └─ ⚠️ Max patch attempts reached. Breaking to outer QA loop.`);
+                    emitter.info("developer", "Max patch attempts reached");
                     break;
                 }
             } else {
-                console.log(`   └─ ✅ Early TS Verification Passed. Breaking to outer QA loop.`);
+                emitter.info("developer", "TypeScript verification passed");
+                emitter.stepDone("developer", state.iterationCount);
                 break;
             }
         }
     }
 
     if (steps >= maxSteps) {
-        console.log("⚠️ [Developer] Max tool steps reached. Forcing stop.");
+        emitter.stepDone("developer", state.iterationCount);
     }
 
     return {
@@ -514,14 +502,12 @@ ${errorContext}`;
  * Runs TypeScript compiler, Vite Build, and Visual QA (Playwright screenshots + Vision LLM).
  */
 async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationState>> {
-    console.log(`[System] QA Reviewer initiating automated tests...`);
-
     // --- Phase 1: TypeScript compilation ---
-    console.log("🔎 [QA Engineer] Running TypeScript compiler checks...");
+    emitter.stepStart("qa_ts", state.iterationCount);
     const tsResult = await tools.runTypeScript(state.sandboxPath);
 
     if (!tsResult.includes("Success:")) {
-        console.log("❌ [QA] TypeScript errors found. Sending back to Developer.");
+        emitter.stepFailed("qa_ts", "TypeScript errors found", state.iterationCount);
         return {
             status: "failed",
             errorLogs: `TypeScript TypeCheck failed:\n${tsResult}`,
@@ -530,11 +516,12 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
     }
 
     // --- Phase 2: Vite Build ---
-    console.log("🔎 [QA Engineer] TypeScript passed. Running Vite Build...");
+    emitter.stepDone("qa_ts", state.iterationCount);
+    emitter.stepStart("qa_build", state.iterationCount);
     const buildResult = await tools.npmRun(state.sandboxPath, "build");
 
     if (!buildResult.includes("Command executed successfully")) {
-        console.log("❌ [QA] Vite Build errors found. Sending back to Developer.");
+        emitter.stepFailed("qa_build", "Vite build errors found", state.iterationCount);
         return {
             status: "failed",
             errorLogs: `Vite Build failed:\n${buildResult}`,
@@ -544,18 +531,21 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
 
     // --- Phase 3: Visual QA (Screenshots + Vision LLM) ---
     // Skip visual QA on the last iteration to avoid infinite visual polish loops
+    emitter.stepDone("qa_build", state.iterationCount);
+
     if (state.iterationCount >= 5) {
-        console.log("✅ [QA] Build passed. Skipping visual QA on final iteration to avoid infinite loops.");
+        emitter.stepStart("qa_visual", state.iterationCount);
+        emitter.stepDone("qa_visual", state.iterationCount);
         return { status: "success", errorLogs: null, messages: state.messages };
     }
 
-    console.log("🎨 [QA Engineer] Build passed. Starting Visual QA...");
+    emitter.stepStart("qa_visual", state.iterationCount);
     try {
         const screenshots = await takeScreenshots(state.sandboxPath);
 
         // Fast-fail on blank page without spending tokens on vision
         if (screenshots.domChecks.isBlankPage) {
-            console.log("❌ [QA] Visual QA: Page is blank.");
+            emitter.stepFailed("qa_visual", "Page is blank or nearly empty", state.iterationCount);
             return {
                 status: "failed",
                 errorLogs: "Visual QA: Page is blank or nearly empty. No visible content rendered.",
@@ -568,16 +558,16 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
         const spec = await tools.readFile(state.sandboxPath, "spec.md");
         const visualResult = await runVisualReview(screenshots, spec);
 
-        console.log(`🎨 [QA] Visual QA Score: ${visualResult.score}/10 — ${visualResult.passed ? "PASSED" : "FAILED"}`);
+        emitter.score(visualResult.score, visualResult.passed);
 
         if (visualResult.passed) {
-            console.log("✅ [QA] All checks passed! Ready for deployment.");
+            emitter.stepDone("qa_visual", state.iterationCount);
             return { status: "success", errorLogs: null, messages: state.messages };
         }
 
         // Visual QA failed — send detailed feedback to developer
         const errorReport = formatVisualErrors(visualResult);
-        console.log("❌ [QA] Visual QA failed. Sending feedback to Developer.");
+        emitter.stepFailed("qa_visual", `Score: ${visualResult.score}/10`, state.iterationCount);
         return {
             status: "failed",
             errorLogs: `Visual QA failed:\n${errorReport}`,
@@ -587,8 +577,8 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
         };
     } catch (err: any) {
         // If Playwright/screenshot fails, don't block the pipeline — pass with a warning
-        console.log(`⚠️ [QA] Visual QA error (non-blocking): ${err.message}`);
-        console.log("✅ [QA] Build passed. Visual QA skipped due to error.");
+        console.log(`Visual QA error (non-blocking): ${err.message}`);
+        emitter.stepDone("qa_visual", state.iterationCount);
         return { status: "success", errorLogs: null, messages: state.messages };
     }
 }
@@ -601,9 +591,10 @@ function routeAfterQA(state: OrchestrationState) {
         return "end";
     }
     if (state.iterationCount >= 6) {
-        console.log("⚠️ [Orchestrator] Max iterations reached. Forcing completion.");
+        emitter.info("qa_visual", "Max iterations reached, forcing completion");
         return "end";
     }
+    emitter.iterationStart(state.iterationCount + 1, 6);
     return "developer";
 }
 
