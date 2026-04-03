@@ -1,35 +1,46 @@
 import { BaseMessage } from "@langchain/core/messages";
+import { z } from "zod";
+
+/**
+ * Validated shape of the business input submitted by the user.
+ * Uses .passthrough() so unknown fields from the frontend don't fail validation.
+ */
+export const BusinessInputSchema = z.object({
+    businessName: z.string().min(1),
+    projectId: z.string().optional(),
+    description: z.string().optional(),
+    tone: z.string().optional(),
+    targetAudience: z.string().optional(),
+    services: z.array(z.string()).optional(),
+}).passthrough();
+
+export type BusinessInput = z.infer<typeof BusinessInputSchema>;
+
+/** Discrete pipeline stages — no arbitrary strings. */
+export type OrchestrationStatus =
+    | 'planning'
+    | 'coding'
+    | 'qa'
+    | 'success'
+    | 'failed';
 
 export interface OrchestrationState {
-    /**
-     * The business details submitted by the user.
-     * e.g., Name, description, tone, target audience.
-     */
-    businessInput: any;
+    /** Validated business details submitted by the user. */
+    businessInput: BusinessInput;
 
-    /**
-     * The UUID of the current isolated sandbox.
-     */
+    /** Absolute path to the isolated sandbox directory, e.g. /tmp/sites/{uuid} */
     sandboxPath: string;
 
-    /**
-     * Current execution status: "planning", "coding", "qa", "success", "failed"
-     */
-    status: string;
+    /** Current pipeline stage. */
+    status: OrchestrationStatus;
 
-    /**
-     * Shared message history for the LLMs.
-     */
+    /** Shared message history passed between nodes. */
     messages: BaseMessage[];
 
-    /**
-     * The latest compiler/error logs from the QA run.
-     */
+    /** Latest compiler/QA error logs. Null when the last QA pass succeeded. */
     errorLogs: string | null;
 
-    /**
-     * Counter to prevent infinite loops (Dev <-> QA)
-     */
+    /** Dev↔QA loop iteration counter. Prevents infinite loops (max 6). */
     iterationCount: number;
 }
 

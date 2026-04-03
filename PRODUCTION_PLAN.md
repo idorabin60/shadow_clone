@@ -157,7 +157,7 @@ Goal: Split the monolith into testable modules. Zero behavior change — all exi
 ---
 
 #### Task 1.1 — Extract XML Parser
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done`
 
 **What:** Move the `<file>` XML extraction regex + scaffold guards out of the 500-line agent loop into `src/orchestrator/xmlParser.ts`.
 
@@ -177,7 +177,7 @@ export function stripXmlFromContent(rawContent: string, parsed: ParsedFile[]): s
 ---
 
 #### Task 1.2 — Extract Scaffold Guard
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done`
 
 **What:** Move `isProtected()`, `shouldAllowProtectedWrite()`, and `PROTECTED_FILES` constant into `src/orchestrator/scaffoldGuard.ts`.
 
@@ -190,7 +190,7 @@ export function stripXmlFromContent(rawContent: string, parsed: ParsedFile[]): s
 ---
 
 #### Task 1.3 — Extract Dev Tool Definitions
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done`
 
 **What:** Move `applyPatchsetTool`, `writeFileTool`, `editFileTool`, `readFileTool`, `listFilesTool`, `npmInstallTool` definitions out of `developerNode` into a factory function in `src/orchestrator/devTools.ts`.
 
@@ -212,7 +212,7 @@ export function createDevTools(
 ---
 
 #### Task 1.4 — Type-Harden OrchestrationState
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done`
 
 **What:** Replace `businessInput: any` and `status: string` with proper types.
 
@@ -261,7 +261,7 @@ Goal: Replace heuristic char-based masking with token-aware, semantically correc
 ---
 
 #### Task 2.1 — Token-Aware Message Trimming
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done`
 
 **What:** Replace `maskMessages()` char-based heuristics with token counting using `tiktoken` (or `@anthropic-ai/tokenizer`). Budget: 80k tokens for Claude Opus context.
 
@@ -291,7 +291,7 @@ export function pruneToTokenBudget(msgs: BaseMessage[], budget: number): BaseMes
 ---
 
 #### Task 2.2 — Decouple Error State from Message History
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done`
 
 **What:** QA errors are currently appended as `HumanMessage` to `state.messages`, causing them to re-appear and compound on every iteration. Instead, store them only in `state.errorLogs` and inject them fresh as a system prompt addendum each time the developer node runs — not as a persisted message.
 
@@ -324,7 +324,7 @@ const errorContext = state.errorLogs
 ---
 
 #### Task 2.3 — Robust Memory Update
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done`
 
 **What:** The current dev_memory.json update at end of developer loop:
 1. Only looks at last 5 messages (misses most of what happened)
@@ -363,7 +363,7 @@ Goal: Replace "dump all errors, fix everything" with targeted, classified recove
 ---
 
 #### Task 3.1 — Error Classifier
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done`
 
 **What:** Create `src/orchestrator/errorClassifier.ts` that parses raw error strings into structured error objects.
 
@@ -398,7 +398,7 @@ src/Hero.tsx(12,3): error TS2345: ...
 ---
 
 #### Task 3.2 — Targeted Re-Prompting
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done`
 
 **What:** When QA fails, instead of sending the full error dump to the developer, send a targeted prompt that includes only the broken files' current content and the specific error.
 
@@ -434,7 +434,7 @@ export function buildTargetedFixPrompt(
 ---
 
 #### Task 3.3 — Inner Loop Exit States
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done`
 
 **What:** The developer inner while loop currently has two exit conditions that are treated identically: "done" (no tools + no patches) and "timeout" (`steps >= maxSteps`). There's also a silent `break` on `patchAttempts >= 2`. Make these explicit and distinct.
 
@@ -473,7 +473,7 @@ Goal: The biggest performance win. Write components in parallel instead of seque
 ---
 
 #### Task 4.1 — Component Planner Node
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done` (merged into Task 4.2 — spec parsing built into parallelWriter.ts)
 
 **What:** Add a new LangGraph node between PM and Developer. It reads `spec.md` and outputs a JSON component plan — a list of components to build with their responsibilities.
 
@@ -508,7 +508,7 @@ export interface ComponentPlan {
 ---
 
 #### Task 4.2 — Parallel Writer Sub-Agents
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done`
 
 **What:** Replace the single monolithic developer loop with parallel per-component writers. Each writer gets:
 - spec.md (full)
@@ -553,7 +553,7 @@ await Promise.all(results.map(r => tools.writeFile(sandboxPath, r.filename, r.co
 ---
 
 #### Task 4.3 — Assembly & Conflict Resolution
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done` (App.tsx generation + tsc check + fix loop fallback built into parallelWriter.ts)
 
 **What:** After parallel writes, an assembler step:
 1. Generates `src/App.tsx` that imports all components (based on component_plan.json)
@@ -586,7 +586,7 @@ function buildAppTsx(components: ComponentSpec[]): string {
 ---
 
 #### Task 5.1 — Per-Node Timeouts
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done`
 
 **What:** Each LangGraph node should time out independently rather than hanging indefinitely.
 
@@ -610,7 +610,7 @@ const TIMEOUTS = {
 ---
 
 #### Task 5.2 — Token & Cost Tracking
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done`
 
 **What:** Track token usage per node and emit it as SSE events so the frontend can show cost estimates.
 
@@ -638,7 +638,7 @@ totalCostUSD: number;  // accumulated across all nodes
 ---
 
 #### Task 5.3 — Structured Logging
-**Status:** `[ ] Not Started`
+**Status:** `[x] Done` (completed in Phase 1 as part of logger.ts integration)
 
 **What:** Replace scattered `console.log` with a structured logger that emits JSON lines — parseable by log aggregators (Datadog, Logtail, etc).
 
