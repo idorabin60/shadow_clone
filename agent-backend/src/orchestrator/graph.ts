@@ -163,26 +163,71 @@ const maskMessages = (msgs: BaseMessage[], max: number): BaseMessage[] => {
 async function productManagerNode(state: OrchestrationState): Promise<Partial<OrchestrationState>> {
     emitter.stepStart("pm");
 
-    const systemPrompt = `You are a world-class UI/UX Designer and "Vibe Architect" for a premium Hebrew landing page builder.
-Your job is to read the client instructions and write a detailed technical spec.md to the codebase.
-The design MUST be Awwwards/Dribbble quality. Basic, outdated designs are unacceptable.
+    const systemPrompt = `You are a world-class UI/UX Designer and Brand Strategist for a premium Hebrew landing page builder.
+Your job is to analyse the client's business and produce a precise, structured spec.md that leaves zero ambiguity for the developer.
+The design MUST be Awwwards/Dribbble quality. Vague or generic specs are unacceptable.
 
-You must explicitly demand the following UI/UX rules in your spec:
-1. Generous, breathable spacing (e.g., py-24, py-32, gap-12).
-2. Modern, premium aesthetics: Glassmorphism (backdrop-blur, bg-white/10), subtle drop-shadows (shadow-2xl), and Bento Box grid layouts for features.
-3. Rich, dynamic backgrounds: Use Tailwind gradients (bg-gradient-to-br) or mesh gradients. Avoid plain flat colors.
-4. Micro-interactions: Demand 'framer-motion' for scroll-reveal animations (fade up, stagger) on all major sections.
-5. High-quality iconography: Demand 'lucide-react' for all icons.
-6. The entire layout must be Right-to-Left (dir="rtl") since the content is Hebrew.
+You MUST output spec.md using EXACTLY this structure (fill every section based on the specific business):
+
+## Business Analysis
+- Type: [SaaS / Restaurant / Professional Service / E-commerce / Health & Wellness / Real Estate / Law / other]
+- Tone: [Professional / Playful / Luxurious / Trustworthy / Bold / Minimalist]
+- Primary CTA: [exact Hebrew button text, e.g. "קבע פגישה עכשיו"]
+- Value Proposition: [one sentence in Hebrew describing the core offer]
+
+## Color Palette
+- Primary: #hex (main brand color — choose based on business type and tone)
+- Secondary: #hex (supporting color for gradients and accents)
+- Accent: #hex (CTA buttons, highlights, links)
+- Background: [Tailwind gradient string, e.g. "from-slate-900 via-blue-950 to-slate-900", or solid hex]
+- Text Primary: #hex
+- Text Secondary: #hex (muted text, subtitles)
+
+## Typography
+- Font Family: Heebo (Hebrew-optimized Google Font) — import via @import in index.css
+- Font Weights: 300 (body light), 400 (body), 700 (bold), 900 (hero headline)
+- Hero Headline: text-6xl md:text-8xl font-black leading-tight tracking-tight
+- Section Headline: text-4xl md:text-5xl font-bold
+- Body Text: text-lg font-light leading-relaxed
+
+## Image Strategy
+- Hero Background: [3-5 relevant Unsplash search keywords for this specific business, e.g. "modern lawyer office" or "artisan bakery bread"]
+- Feature/About Images: [3-5 relevant keywords]
+- Style Rules: object-cover rounded-2xl shadow-2xl; hero images w=1600, card images w=800
+
+## Sections (ordered — business-specific, not generic)
+List EVERY section with its exact Hebrew content brief:
+1. Navbar — logo (business name in Hebrew) + Hebrew nav links
+2. Hero — [Hebrew headline], [Hebrew subline], CTA button: "[exact Hebrew CTA text]"
+3. [Section name] — [brief content description with Hebrew placeholder copy]
+... (add as many as this business needs: Features, About, Gallery, Pricing, Testimonials, FAQ, Contact, etc.)
+N. Footer — Hebrew links, copyright, social icons
+
+## Component List
+List every .tsx file the developer must create (one per line, src/ prefix):
+- src/App.tsx
+- src/Navbar.tsx
+- src/Hero.tsx
+- src/[BusinessSpecificSection].tsx
+...
+- src/Footer.tsx
+
+## Design System Rules
+- Spacing: generous py-24 md:py-32 between sections, gap-8 md:gap-12 in grids
+- Cards: glassmorphism (bg-white/10 backdrop-blur-md border border-white/20 shadow-2xl rounded-2xl)
+- Animations: framer-motion on every section (fade-up with staggered children, viewport trigger)
+- Icons: lucide-react only
+- RTL: dir="rtl" on root element, text-right throughout, flex-row-reverse where needed
+- Images: never empty divs; always Unsplash URLs relevant to this business
 
 Here are the specific Business Details from the user:
 ${JSON.stringify(state.businessInput, null, 2)}
 
-Write the exact content of the spec.md wrapped in a markdown code block.`;
+Output ONLY the spec.md content wrapped in a markdown code block. No other text.`;
 
     const response = await pmModel.invoke([
         new SystemMessage(systemPrompt),
-        new HumanMessage("Please generate the technical spec.md using my exact business details and the strictest Dribbble/Awwwards Vibe rules."),
+        new HumanMessage("Generate the spec.md for this business. Fill every section with specific, concrete details — no generic placeholders."),
         ...state.messages
     ]);
 
@@ -196,9 +241,27 @@ Write the exact content of the spec.md wrapped in a markdown code block.`;
     // Use the write tool to save it
     await tools.writeFile(state.sandboxPath, "spec.md", specContent);
 
-    // Initializing Task E: Project Manifest
+    // Parse the Component List from spec.md so the manifest reflects the actual business structure.
+    // Falls back to the default 4-component set if the section is missing or malformed.
+    const componentListMatch = specContent.match(/## Component List\n([\s\S]*?)(?:\n##|$)/);
+    let componentsList: string[] = ["App.tsx", "Navbar.tsx", "Hero.tsx", "Footer.tsx"];
+    if (componentListMatch) {
+        const parsed = componentListMatch[1]
+            .split("\n")
+            .map(line => line.replace(/^-\s*src\//, "").trim())
+            .filter(line => line.endsWith(".tsx") && line.length > 0);
+        if (parsed.length >= 3) {
+            componentsList = parsed;
+            console.log(`[PM] Parsed ${parsed.length} components from spec: [${parsed.join(", ")}]`);
+        } else {
+            console.log(`[PM] Component list parse yielded < 3 items, using defaults`);
+        }
+    } else {
+        console.log(`[PM] No '## Component List' section found in spec, using defaults`);
+    }
+
     const initialManifest = {
-        components_list: ["App.tsx", "Navbar.tsx", "Hero.tsx", "Footer.tsx"],
+        components_list: componentsList,
         naming_rules: [
             "Navigation MUST be named Navbar.tsx. Never Navigation.tsx",
             "Do not overwrite tailwind.config.js unless requested",
@@ -272,38 +335,42 @@ Use this to understand what has already been built and what remains. You will up
         : "";
 
     const devPrompt = `You are an elite Senior React/Vite Developer at a top-tier design agency.
-You are building an ultra-premium landing page based on the UX Architect's spec.
+You are building an ultra-premium Hebrew landing page. The spec.md below defines EVERYTHING: colors, fonts, sections, image themes, and Hebrew copy. Follow it precisely.
 
 CRITICAL TECHNICAL LIBRARIES (PRE-INSTALLED, DO NOT NPM INSTALL THEM):
-- 'lucide-react' (For beautiful, consistent iconography)
-- 'framer-motion' (For premium scroll and hover animations)
+- 'lucide-react' (icons)
+- 'framer-motion' (animations)
 - 'clsx' and 'tailwind-merge'
 Tailwind CSS is fully configured.
 
-MANDATORY DESIGN & "VIBE" RULES:
-1. The design MUST look like a modern, $10,000 premium Silicon Valley startup landing page. Basic HTML/Tailwind is unacceptable.
-2. Use <motion.div> extensively. Everything should fade up or slide in when rendering.
-3. Shadows & Depth: Use shadow-xl, shadow-2xl, and ring utilities to give cards depth.
-4. Glassmorphism: For cards and navbars, heavily utilize bg-white/10 or bg-black/10 with backdrop-blur-md and subtle borders.
-5. Typography: Giant, ultra-bold Hero headlines (text-5xl md:text-7xl font-extrabold tracking-tight).
-6. Images: Never use empty divs. Use beautiful high-res Unsplash placeholders. (e.g., 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80', or 'https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=800&q=80'). Style images beautifully with rounded-2xl and shadow-2xl.
-7. Direction: Ensure the root element has dir="rtl" and text-right for Hebrew content.
-8. Component Naming: The navigation component MUST be named "Navbar.tsx" (do not create "Navigation.tsx").
+MANDATORY FIRST STEP — FONT SETUP:
+In src/index.css, add this at the very top (BEFORE any other styles):
+@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;700;900&display=swap');
+And in the body/html rule: font-family: 'Heebo', sans-serif; direction: rtl;
+
+MANDATORY DESIGN & IMPLEMENTATION RULES:
+1. Follow the spec.md Color Palette EXACTLY — use the specified hex values and gradient for the background. Do not invent colors.
+2. Follow the spec.md Typography scale EXACTLY — hero sizes, section sizes, weights as specified.
+3. Animations: wrap every section in <motion.div> with viewport-triggered fade-up (initial={{ opacity: 0, y: 40 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} transition={{ duration: 0.6 }}). Stagger children with staggerChildren: 0.1.
+4. Glassmorphism cards: bg-white/10 backdrop-blur-md border border-white/20 shadow-2xl rounded-2xl p-6.
+5. Images: use Unsplash URLs matching the business theme from spec.md Image Strategy.
+   URL format: https://images.unsplash.com/photo-XXXXXX?auto=format&fit=crop&w=1200&q=80
+   Choose photos relevant to the business — read the spec.md Image Strategy section for the correct themes.
+   Hero backgrounds: use w=1600. Card images: use w=800. Always: rounded-2xl shadow-2xl object-cover.
+6. RTL: dir="rtl" on the root <div> in App.tsx. text-right on all text. flex-row-reverse on horizontal layouts.
+7. Component naming: navigation MUST be Navbar.tsx. Never Navigation.tsx.
+8. Build EVERY component listed in spec.md Component List — do not skip any section.
+9. Hebrew copy: use the actual Hebrew content from spec.md, not generic placeholders.
 
 CRITICAL WORKFLOW (PLAN -> PATCH -> VERIFY):
-You must optimize for the fewest LLM tool invocation round-trips possible.
-1. PLAN & READ: First, optionally use 'read_file' or 'list_files' to explore.
-2. PATCH: You MUST output all file creations and full file rewrites directly as raw XML in your text response. DO NOT use JSON tools like write_file or apply_patchset.
-   EXAMPLE XML OUTPUT FORMAT:
+1. READ spec.md carefully — it defines sections, colors, fonts, and image themes for THIS specific business.
+2. PATCH: output ALL files as raw XML <file> blocks in your text response. Do NOT use write_file or apply_patchset tools.
    <file path="src/App.tsx">
-   export default function App() { return <div />; }
+   export default function App() { return <div dir="rtl" />; }
    </file>
-   <file path="src/main.tsx">
-   console.log("Updated");
-   </file>
-3. VERIFY: We will automatically extract your XML artifacts, save them, and run 'tsc --noEmit' to verify.
+3. VERIFY: your XML is auto-extracted and tsc --noEmit is run. Fix any errors in the next step.
 
-Your task: Output the XML <file> blocks to construct the frontend application efficiently in 1-2 steps. Finish the turn ONLY when the entire codebase is fully assembled and visually stunning according to the spec.
+Your task: Build the complete application — every component from the spec — in a single pass. Quality over speed. The result must be visually stunning and match the spec exactly.
 
 Here is the exact spec.md written by the UX Architect:
 =========================================
