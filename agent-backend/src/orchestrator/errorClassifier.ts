@@ -7,7 +7,7 @@
  *
  * Handles three error types:
  *   - typescript: from `tsc --noEmit` (extracts file paths from TS error lines)
- *   - build:      from `vite build` (extracts file paths from Rollup/plugin output)
+ *   - build:      from `next build` (extracts file paths from Webpack/Next.js output)
  *   - visual:     from vision LLM review (score + critical issues)
  */
 
@@ -54,7 +54,7 @@ function extractTsFiles(errorText: string): string[] {
     return [...files];
 }
 
-// Vite build errors reference source files in various ways
+// Next.js build errors reference source files in various ways
 function extractBuildFiles(errorText: string): string[] {
     const files = new Set<string>();
 
@@ -93,13 +93,13 @@ export function classifyError(errorLogs: string): ClassifiedError {
         return result;
     }
 
-    // Vite build failures
-    if (errorLogs.startsWith('Vite Build failed') || errorLogs.includes('vite build')) {
+    // Next.js build failures
+    if (errorLogs.startsWith('Next.js Build failed') || errorLogs.includes('next build') || errorLogs.includes('Build Error')) {
         const files = extractBuildFiles(errorLogs);
         const result: ClassifiedError = {
             type: 'build',
             affectedFiles: files,
-            summary: `Vite build failed${files.length > 0 ? ` — ${files.join(', ')}` : ''}`,
+            summary: `Next.js build failed${files.length > 0 ? ` — ${files.join(', ')}` : ''}`,
             rawMessage: errorLogs,
         };
         log('XML', 'classified', { type: result.type, files: result.affectedFiles, summary: result.summary });
@@ -144,7 +144,7 @@ export function buildTargetedFixPrompt(
         const filesIntro = fileContents.length > 0
             ? `Affected files:\n\n${filesSection}\n\n`
             : '';
-        return `Vite build failed (${classified.summary}).\n\n${filesIntro}Build output:\n\`\`\`\n${classified.rawMessage}\n\`\`\`\n\nFix the import/export errors with <file> blocks.`;
+        return `Next.js build failed (${classified.summary}).\n\n${filesIntro}Build output:\n\`\`\`\n${classified.rawMessage}\n\`\`\`\n\nFix the Next.js build errors with <file> blocks.`;
     }
 
     // visual — no file contents, just the QA report

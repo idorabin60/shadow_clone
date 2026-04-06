@@ -30,7 +30,6 @@ const openaiModel = new ChatOpenAI({
     temperature: 0
 });
 
-// We prefer Claude 3.5 Sonnet for the Developer and Architect nodes as it is currently 
 // the industry gold standard for autonomous React/Vite coding and complex tool patching.
 const claudePmModel = process.env.ANTHROPIC_API_KEY
     ? new ChatAnthropic({
@@ -122,7 +121,7 @@ async function productManagerNode(state: OrchestrationState): Promise<Partial<Or
     // Store on state for downstream nodes (parallel writer, dev prompt)
     (state as any).__designSystem = designSystem;
 
-    const systemPrompt = `You are a world-class UI/UX Designer and Brand Strategist for a premium Hebrew landing page builder.
+    const systemPrompt = `You are a world-class UI/UX Designer and Brand Strategist for a premium landing page builder.
 Your job is to analyse the client's business and produce a precise, structured spec.md that leaves zero ambiguity for the developer.
 The design MUST be Awwwards/Dribbble quality. Vague or generic specs are unacceptable.
 
@@ -135,7 +134,7 @@ DESIGN SYSTEM RECOMMENDATION (generated from analysis of "${designQuery}"):
 - Recommended Colors: Primary ${designSystem.colors.primary}, Secondary ${designSystem.colors.secondary}, Accent ${designSystem.colors.accent}, Background ${designSystem.colors.background}, Text ${designSystem.colors.text}
 - Color Notes: ${designSystem.colors.notes}
 - Heading Font: ${designSystem.typography.headingFont}
-- Body Font: ${designSystem.typography.bodyFont} (Hebrew-compatible)
+- Body Font: ${designSystem.typography.bodyFont}
 - Recommended Sections: ${designSystem.layout.sections.join(' > ')}
 - Layout Pattern: ${designSystem.layout.pattern}
 - CTA Placement: ${designSystem.layout.ctaPlacement}
@@ -147,8 +146,8 @@ You MUST output spec.md using EXACTLY this structure (fill every section based o
 ## Business Analysis
 - Type: ${designSystem.category}
 - Tone: [Professional / Playful / Luxurious / Trustworthy / Bold / Minimalist — pick based on business]
-- Primary CTA: [exact Hebrew button text, e.g. "קבע פגישה עכשיו"]
-- Value Proposition: [one sentence in Hebrew describing the core offer]
+- Primary CTA: [exact button text, e.g. "Get Started Now"]
+- Value Proposition: [one sentence describing the core offer]
 
 ## Color Palette
 Use the recommended colors as your starting point. Fine-tune if needed for this specific brand.
@@ -161,7 +160,7 @@ Use the recommended colors as your starting point. Fine-tune if needed for this 
 
 ## Typography
 - Heading Font: ${designSystem.typography.headingFont}
-- Body Font: ${designSystem.typography.bodyFont} (Hebrew-compatible)
+- Body Font: ${designSystem.typography.bodyFont}
 - CSS Import: ${designSystem.typography.cssImport}
 - Font Weights: 300 (body light), 400 (body), 700 (bold), 900 (hero headline)
 - Hero Headline: text-6xl md:text-8xl font-black leading-tight tracking-tight
@@ -175,11 +174,11 @@ Use the recommended colors as your starting point. Fine-tune if needed for this 
 
 ## Sections (ordered — business-specific, not generic)
 Use the recommended sections (${designSystem.layout.sections.join(', ')}) as a starting point, but adapt for this specific business:
-1. Navbar — logo (business name in Hebrew) + Hebrew nav links
-2. Hero — [Hebrew headline], [Hebrew subline], CTA button: "[exact Hebrew CTA text]"
-3. [Section name] — [brief content description with Hebrew placeholder copy]
+1. Navbar — logo (business name) + nav links
+2. Hero — [headline], [subline], CTA button: "[exact CTA text]"
+3. [Section name] — [brief content description with placeholder copy]
 ... (add as many as this business needs)
-N. Footer — Hebrew links, copyright, social icons
+N. Footer — links, copyright, social icons
 
 ## Component List
 List every section component .tsx file the developer must create (one per line):
@@ -194,7 +193,7 @@ List every section component .tsx file the developer must create (one per line):
 - Effects: ${designSystem.style.effects.join(', ')}
 - Animations: framer-motion on sections (use effects appropriate to the "${designSystem.style.name}" style — NOT always fade-up)
 - Icons: lucide-react only
-- RTL: dir="rtl" on root element, text-right throughout, flex-row-reverse where needed
+- RTL: do not use RTL. Use standard LTR layout.
 - Images: never empty divs; always Unsplash URLs relevant to this business
 - AVOID: ${designSystem.style.antiPatterns.join(', ')}
 
@@ -408,13 +407,13 @@ Use this to understand what has already been built and what remains. You will up
         ? generateDesignTokenBlock(devDesignSystem)
         : `FONT SETUP (in src/globals.css):
 @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;700;900&display=swap');
-Body font: 'Heebo', sans-serif; direction: rtl;`;
+Body font: 'Inter', sans-serif;`;
 
     const devPrompt = `You are an elite Senior Next.js Developer at a top-tier design agency.
-You are building an ultra-premium Hebrew landing page using Next.js App Router. The spec.md below defines EVERYTHING: colors, fonts, sections, image themes, and Hebrew copy. Follow it precisely.
+You are building an ultra-premium landing page using Next.js App Router. The spec.md below defines EVERYTHING: colors, fonts, sections, image themes, and copy. Follow it precisely.
 
 PROJECT STRUCTURE (Next.js App Router):
-- src/app/layout.tsx — root layout with HTML lang="he" dir="rtl"
+- src/app/layout.tsx — root layout with HTML lang="en"
 - src/app/page.tsx — main page that imports and renders all section components
 - src/components/sections/ — individual section components (Hero.tsx, Services.tsx, etc.)
 - src/components/ui/ — shadcn/ui components (pre-installed)
@@ -453,17 +452,17 @@ MANDATORY DESIGN & IMPLEMENTATION RULES:
    URL format: https://images.unsplash.com/photo-XXXXXX?auto=format&fit=crop&w=1200&q=80
    Choose photos relevant to the business — read the spec.md Image Strategy section for the correct themes.
    Hero backgrounds: use w=1600. Card images: use w=800.
-6. RTL: dir="rtl" on the root <div> in App.tsx. text-right on all text. flex-row-reverse on horizontal layouts.
+6. Layout: Build a highly structured Left-To-Right (LTR) application layout. Use clean standard grids and flexbox.
 7. Component naming: navigation MUST be Navbar.tsx. Never Navigation.tsx.
 8. Build EVERY component listed in spec.md Component List — do not skip any section.
-9. Hebrew copy: use the actual Hebrew content from spec.md, not generic placeholders.
+9. Copywriting: use the actual English content from spec.md, not generic placeholders.
 
 CRITICAL WORKFLOW (PATCH -> VERIFY):
 1. READ spec.md carefully — it defines sections, colors, fonts, and image themes for THIS specific business.
 2. PATCH: output ALL files as raw XML <file> blocks in your text response. Do NOT use write_file or apply_patchset tools.
    <file path="src/components/sections/Hero.tsx">
    "use client";
-   export default function Hero() { return <section dir="rtl" />; }
+   export default function Hero() { return <section className="relative w-full overflow-hidden" />; }
    </file>
 3. VERIFY: your XML is auto-extracted and tsc --noEmit is run. Fix any errors in the next step.
 
@@ -906,7 +905,7 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
                 emitter.stepFailed("qa_visual", "Page is blank or nearly empty", state.iterationCount);
                 return {
                     status: "failed",
-                    errorLogs: `Visual QA: Page is blank or nearly empty (${dc.bodyTextLength} chars of text). Check App.tsx exports a proper component tree and all sections render Hebrew content.`,
+                    errorLogs: `Visual QA: Page is blank or nearly empty (${dc.bodyTextLength} chars of text). Check App.tsx exports a proper component tree and all sections render visible content.`,
                     messages: state.messages,
                 };
             }

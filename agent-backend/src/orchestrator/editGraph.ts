@@ -40,7 +40,7 @@ async function editDeveloperNode(state: EditState): Promise<Partial<EditState>> 
         ? `\n\nCRITICAL: Your previous edit caused errors that must be fixed:\n${state.errorLogs}\n`
         : "";
 
-    const editPrompt = `You are an elite Senior React/Vite Developer editing an existing premium Hebrew landing page.
+    const editPrompt = `You are an elite Senior Next.js App Router Developer editing an existing premium landing page.
 The user wants a specific change. You must apply ONLY the minimal edits needed — do NOT rewrite the entire codebase.
 
 CRITICAL WORKFLOW:
@@ -51,7 +51,7 @@ CRITICAL WORKFLOW:
 IMPORTANT: After reading files, you MUST produce <file> XML blocks with the fix. Do NOT just describe the problem — actually fix it by outputting the corrected file contents. Every response after reading should contain at least one <file> block.
 
 RULES:
-- The site is Hebrew, RTL (dir="rtl"). Maintain this in any new content.
+- The site follows a modern UX aesthetic. Maintain this in any new content.
 - All pre-installed libraries (framer-motion, lucide-react, clsx, tailwind-merge) are available — do NOT npm install them.
 - The navigation component is always "Navbar.tsx" — never "Navigation.tsx".
 - You CAN modify tailwind.config.js if the fix requires adding custom colors, fonts, or theme extensions. However, do NOT change next.config.mjs or tsconfig.json unless QA errors require it.
@@ -246,7 +246,7 @@ USER'S EDIT REQUEST:
 
 /**
  * Node 2: Edit QA
- * Runs TypeScript + Vite build. Skips visual QA for faster iteration.
+ * Runs TypeScript + Next.js build. Skips visual QA for faster iteration.
  */
 async function editQaNode(state: EditState): Promise<Partial<EditState>> {
     // Phase 1: TypeScript
@@ -262,7 +262,7 @@ async function editQaNode(state: EditState): Promise<Partial<EditState>> {
         };
     }
 
-    // Phase 2: Vite Build
+    // Phase 2: Next.js Build
     emitter.stepDone("edit_qa_ts", state.iterationCount);
     emitter.stepStart("edit_qa_build", state.iterationCount);
     const buildResult = await tools.npmRun(state.sandboxPath, "build");
@@ -271,7 +271,7 @@ async function editQaNode(state: EditState): Promise<Partial<EditState>> {
         emitter.stepFailed("edit_qa_build", "Build failed", state.iterationCount);
         return {
             status: "failed",
-            errorLogs: `Vite Build failed:\n${buildResult}`,
+            errorLogs: `Next.js Build failed:\n${buildResult}`,
             messages: [...state.messages, new HumanMessage(`[Edit QA] Build failed:\n${buildResult}\n\nFix these errors with corrected <file> blocks.`)]
         };
     }

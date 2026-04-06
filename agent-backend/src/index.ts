@@ -230,6 +230,10 @@ app.get("/api/orchestrate/stream/:uuid", (req, res) => {
     });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, (err?: any) => {
+    if (err) {
+        console.error(`\n❌ [FATAL] Failed to bind to PORT ${PORT}. Is another instance already running?\n`, err.message);
+        process.exit(1);
+    }
     console.log(`🚀 Agent Orchestrator Backend running on http://localhost:${PORT}`);
 });

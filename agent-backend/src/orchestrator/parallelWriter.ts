@@ -79,7 +79,7 @@ ${brief}
 `
         : '';
 
-    const prompt = `You are an elite frontend developer creating ONE React component for a PREMIUM Hebrew Next.js landing page.
+    const prompt = `You are an elite frontend developer creating ONE React component for a PREMIUM Next.js landing page.
 This is NOT a wireframe or prototype — it must look like a production site from a top design agency.
 Output EXACTLY one <file path="${comp.filename}"> block. No explanation, no other text.
 
@@ -100,7 +100,7 @@ IMPLEMENTATION RULES:
    - Every section: viewport-triggered entrance with stagger on children
    - Cards: whileHover with y:-5 and scale:1.02
 5. Import icons from 'lucide-react' as needed. Use them decoratively, not just functionally.
-6. All text must be in Hebrew. Use text-right and RTL-compatible layouts (flex-row-reverse where needed).
+6. All text should be in English. Maintain standard modern left-to-right (LTR) reading flow.
 7. IMAGES: Use next/image's Image component. Import: import Image from "next/image".
    - Use real Unsplash photo URLs: https://images.unsplash.com/photo-XXXX?auto=format&fit=crop&w=800&q=80
    - For PEOPLE (team, testimonials): vary the photo ID for each person
@@ -154,13 +154,13 @@ IMPLEMENTATION RULES:
 
 function generateGlobalsCss(ds: DesignSystemRecommendation | null): string {
     const cssImport = ds?.typography.cssImport
-        || "@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;700;900&display=swap');";
-    const bodyFont = ds?.typography.bodyFont || 'Heebo';
-    const headingFont = ds?.typography.headingFont || 'Heebo';
+        || "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700;900&display=swap');";
+    const bodyFont = ds?.typography.bodyFont || 'Inter';
+    const headingFont = ds?.typography.headingFont || 'Inter';
 
     const fontFamilyParts = [bodyFont];
     if (headingFont !== bodyFont) fontFamilyParts.unshift(headingFont);
-    if (!fontFamilyParts.includes('Heebo')) fontFamilyParts.push('Heebo');
+    if (!fontFamilyParts.includes('Inter')) fontFamilyParts.push('Inter');
     const fontFamily = fontFamilyParts.map(f => `'${f}'`).join(', ') + ', sans-serif';
 
     return `${cssImport}
@@ -172,7 +172,6 @@ function generateGlobalsCss(ds: DesignSystemRecommendation | null): string {
 @layer base {
     html {
         font-family: ${fontFamily};
-        direction: rtl;
     }
     body {
         @apply antialiased;
@@ -205,7 +204,7 @@ export const dynamic = 'force-dynamic';
 
 export default function Home() {
   return (
-    <main dir="rtl" className="min-h-screen bg-gradient-to-b ${bgGradient}">
+    <main className="min-h-screen bg-gradient-to-b ${bgGradient}">
 ${renders}
     </main>
   );

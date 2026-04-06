@@ -145,9 +145,9 @@ const DEFAULT_RECOMMENDATION: DesignSystemRecommendation = {
         notes: 'Default indigo + amber accent',
     },
     typography: {
-        headingFont: 'Heebo',
-        bodyFont: 'Heebo',
-        cssImport: "@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;700;900&display=swap');",
+        headingFont: 'Inter',
+        bodyFont: 'Inter',
+        cssImport: "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700;900&display=swap');",
     },
     layout: {
         pattern: 'Hero + Features + CTA',
@@ -189,28 +189,10 @@ function transformRaw(raw: RawDesignSystem): DesignSystemRecommendation {
         .map(a => a.trim())
         .filter(Boolean);
 
-    // Hebrew font validation: ensure body font supports Hebrew
-    let bodyFont = raw.typography.body || 'Heebo';
-    let headingFont = raw.typography.heading || 'Heebo';
+    // Standard text rendering bypasses manual font mapping
+    let bodyFont = raw.typography.body || 'Inter';
+    let headingFont = raw.typography.heading || 'Inter';
     let cssImport = raw.typography.css_import || '';
-
-    if (!isHebrewCompatible(bodyFont)) {
-        // Add Heebo as the body font alongside the recommended heading font
-        bodyFont = 'Heebo';
-        cssImport = cssImport
-            ? `${cssImport}\n@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;700;900&display=swap');`
-            : "@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;700;900&display=swap');";
-        log('DESIGN', 'hebrew_font_fallback', {
-            originalBody: raw.typography.body,
-            fallback: 'Heebo',
-        });
-    }
-
-    // If heading font doesn't support Hebrew either, keep it for display
-    // but ensure the cssImport includes Heebo regardless
-    if (!isHebrewCompatible(headingFont) && !cssImport.includes('Heebo')) {
-        cssImport += "\n@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;700;900&display=swap');";
-    }
 
     return {
         category: raw.category,

@@ -28,12 +28,7 @@ function validateDomChecks(domChecks: DomChecks): string[] {
     if (domChecks.isBlankPage) {
         failures.push("CRITICAL: Page is blank or nearly empty (less than 50 characters of text content).");
     }
-    if (!domChecks.hasRtlDir) {
-        failures.push("CRITICAL: Missing dir='rtl' on html or body element. Hebrew content requires RTL layout.");
-    }
-    if (!domChecks.hasHebrew) {
-        failures.push("CRITICAL: No Hebrew characters detected on the page. The landing page must contain Hebrew text.");
-    }
+
     if (domChecks.brokenImages > 0) {
         failures.push(`WARNING: ${domChecks.brokenImages} of ${domChecks.imageCount} images failed to load (naturalWidth === 0).`);
     }
@@ -54,13 +49,13 @@ async function callVisionLLM(
     screenshots: ScreenshotResult,
     specContent: string
 ): Promise<{ score: number; criticalIssues: string[]; warnings: string[]; suggestions: string[] }> {
-    const systemPrompt = `You are a senior UI/UX QA reviewer for a premium Hebrew landing page builder.
+    const systemPrompt = `You are a senior UI/UX QA reviewer for a premium landing page builder.
 Your job is to review screenshots of a generated landing page and evaluate its visual quality against the design spec.
 
 You must evaluate these specific criteria:
-1. LAYOUT: Is it properly RTL (right-to-left)? Are sections well-structured with generous spacing?
+1. LAYOUT: Is the layout modern? Are sections well-structured with generous spacing?
 2. VISUAL QUALITY: Does it use glassmorphism, gradients, shadows, and modern aesthetics? Is it Awwwards/Dribbble quality?
-3. TYPOGRAPHY: Are headlines large and bold? Is the Hebrew text readable and well-sized?
+3. TYPOGRAPHY: Are headlines large and bold? Is the text readable and well-sized?
 4. RESPONSIVENESS: Does the mobile viewport look intentional (not just squished desktop)?
 5. CONTENT COMPLETENESS: Are all spec sections present (Hero, About, Features, Testimonials, CTA, Footer)?
 6. IMAGES: Are images visible and well-styled (rounded corners, shadows)?
@@ -81,14 +76,14 @@ Rules for scoring:
 - 8-9: Premium quality, minor issues only
 - 10: Perfect Awwwards-level execution
 
-criticalIssues = things that MUST be fixed (broken layout, missing sections, blank areas, no RTL)
+criticalIssues = things that MUST be fixed (broken layout, missing sections, blank areas)
 warnings = things that SHOULD be fixed (poor spacing, weak typography, missing animations)
 suggestions = nice-to-have improvements (color tweaks, animation polish)`;
 
     const userContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
         {
             type: "text",
-            text: `Review these screenshots of a generated Hebrew landing page against this spec:\n\n---SPEC START---\n${specContent.substring(0, 3000)}\n---SPEC END---\n\nScreenshot 1: Desktop viewport (1440x900)\nScreenshot 2: Mobile viewport (375x812)\nScreenshot 3: Full-page desktop scroll`,
+            text: `Review these screenshots of a generated landing page against this spec:\n\n---SPEC START---\n${specContent.substring(0, 3000)}\n---SPEC END---\n\nScreenshot 1: Desktop viewport (1440x900)\nScreenshot 2: Mobile viewport (375x812)\nScreenshot 3: Full-page desktop scroll`,
         },
         {
             type: "image_url",
