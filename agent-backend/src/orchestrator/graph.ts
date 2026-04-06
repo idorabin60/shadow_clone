@@ -57,7 +57,7 @@ const devModel = claudeDevModel;
 // ─── Per-node timeouts (ms) — prevents any single LLM call from hanging ─────
 const TIMEOUTS = {
     pm: 180_000,          // 180s — PM writes spec
-    devLoopStep: 180_000, // 180s — each step in the developer agent loop (Opus needs time for large rewrites)
+    devLoopStep: 300_000, // 300s — each step in the developer agent loop (Opus needs time for large rewrites)
     qa_ts: 30_000,        // 30s — tsc check
     qa_build: 120_000,    // 120s — next build (longer than vite)
     qa_visual: 180_000,   // 3 min — screenshots + vision LLM
@@ -89,6 +89,10 @@ async function productManagerNode(state: OrchestrationState): Promise<Partial<Or
     const sandboxId = state.sandboxPath.split('/').pop() ?? state.sandboxPath;
     const pmStart = Date.now();
     log('PM', 'start', { sandboxId, businessName: (state.businessInput as any)?.businessName });
+    log('PM', 'model_check', {
+        hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
+        usingModel: process.env.ANTHROPIC_API_KEY ? "claude-sonnet-4-6" : "gpt-4o (fallback)"
+    });
     emitter.stepStart("pm");
 
     // Generate data-driven design system recommendation based on business type.
@@ -235,6 +239,13 @@ Output ONLY the spec.md content wrapped in a markdown code block. No other text.
         log('PM', 'extracted_from_fence', { chars: specContent.length });
     }
 
+    // Fallback: If the LLM generated multiple blocks or put the component list outside the first fence,
+    // revert to the raw output to guarantee we don't blind the Developer node.
+    if (!specContent.includes('## Component List') && (response.content as string).includes('## Component List')) {
+        specContent = response.content as string;
+        log('PM', 'extraction_fallback_to_raw', { chars: specContent.length });
+    }
+
     if (specContent.length < 500) {
         log('PM', 'spec_too_short', { chars: specContent.length, preview: specContent.slice(0, 200) });
     }
@@ -282,7 +293,8 @@ Output ONLY the spec.md content wrapped in a markdown code block. No other text.
         naming_rules: [
             "Navigation MUST be named Navbar.tsx. Never Navigation.tsx",
             "Do not overwrite tailwind.config.js unless requested",
-            "Avoid rewriting index.html"
+            "Avoid rewriting index.html",
+            "Never use <a> tags inside <Link>. Use modern Next.js <Link href=\"...\">Text</Link> syntax."
         ],
         entry_file_imports: ["import App from './App.tsx'"]
     };
@@ -815,134 +827,134 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
     const qaStart = Date.now();
     log('QA_TS', 'start', { sandboxId, iteration: state.iterationCount });
 
-  try {
-    // --- Phase 1: TypeScript compilation ---
-    emitter.stepStart("qa_ts", state.iterationCount);
-    const tsResult = await withTimeout(tools.runTypeScript(state.sandboxPath), TIMEOUTS.qa_ts, 'QA_TS');
-    const tsPassed = tsResult.includes("Success:");
-    log('QA_TS', 'result', { passed: tsPassed, elapsedMs: Date.now() - qaStart });
-
-    if (!tsPassed) {
-        emitter.stepFailed("qa_ts", "TypeScript errors found", state.iterationCount);
-        // Task 2.2: error goes into errorLogs only — developer node re-injects it via system prompt.
-        // Do NOT append to state.messages (prevents error accumulation across iterations).
-        return {
-            status: "failed",
-            errorLogs: `TypeScript TypeCheck failed:\n${tsResult}`,
-            messages: state.messages,
-        };
-    }
-
-    // --- Phase 2: Next.js Build ---
-    emitter.stepDone("qa_ts", state.iterationCount);
-    emitter.stepStart("qa_build", state.iterationCount);
-    const buildStart = Date.now();
-    const buildResult = await withTimeout(tools.npmRun(state.sandboxPath, "build"), TIMEOUTS.qa_build, 'QA_BUILD');
-    const buildPassed = buildResult.includes("Command executed successfully");
-    log('QA_BUILD', 'result', { passed: buildPassed, elapsedMs: Date.now() - buildStart });
-
-    if (!buildPassed) {
-        emitter.stepFailed("qa_build", "Next.js build errors found", state.iterationCount);
-        return {
-            status: "failed",
-            errorLogs: `Next.js Build failed:\n${buildResult}`,
-            messages: state.messages,
-        };
-    }
-
-    // --- Phase 3: Visual QA (Screenshots + Vision LLM) ---
-    emitter.stepDone("qa_build", state.iterationCount);
-
-    // Skip visual QA on the last iteration to avoid infinite visual polish loops
-    if (state.iterationCount >= 5) {
-        log('QA_VISUAL', 'skipped', { reason: 'max_iteration', iteration: state.iterationCount });
-        emitter.stepStart("qa_visual", state.iterationCount);
-        emitter.stepDone("qa_visual", state.iterationCount);
-        return { status: "success", errorLogs: null, messages: state.messages };
-    }
-
-    emitter.stepStart("qa_visual", state.iterationCount);
-    const visualStart = Date.now();
     try {
-        const screenshots = await withTimeout(takeScreenshots(state.sandboxPath), TIMEOUTS.qa_visual, 'QA_VISUAL');
-        log('QA_VISUAL', 'screenshots_taken', {
-            hasScreenshots: !!screenshots,
-            hasDomChecks: !!screenshots?.domChecks,
-            keys: screenshots ? Object.keys(screenshots) : [],
-        });
+        // --- Phase 1: TypeScript compilation ---
+        emitter.stepStart("qa_ts", state.iterationCount);
+        const tsResult = await withTimeout(tools.runTypeScript(state.sandboxPath), TIMEOUTS.qa_ts, 'QA_TS');
+        const tsPassed = tsResult.includes("Success:");
+        log('QA_TS', 'result', { passed: tsPassed, elapsedMs: Date.now() - qaStart });
 
-        const dc = screenshots?.domChecks;
-        if (!dc) {
-            log('QA_VISUAL', 'no_dom_checks', { screenshotKeys: screenshots ? Object.keys(screenshots) : [] });
-            emitter.stepDone("qa_visual", state.iterationCount);
-            return { status: "success", errorLogs: null, messages: state.messages };
-        }
-
-        log('QA_VISUAL', 'dom_checks', {
-            rtl: dc.hasRtlDir,
-            hebrew: dc.hasHebrew,
-            images: dc.imageCount,
-            brokenImages: dc.brokenImages,
-            sections: dc.sectionCount,
-            blank: dc.isBlankPage,
-            textLength: dc.bodyTextLength,
-        });
-
-        // Fast-fail on blank page without spending tokens on vision
-        if (dc.isBlankPage) {
-            log('QA_VISUAL', 'blank_page_fail', { textLength: dc.bodyTextLength });
-            emitter.stepFailed("qa_visual", "Page is blank or nearly empty", state.iterationCount);
+        if (!tsPassed) {
+            emitter.stepFailed("qa_ts", "TypeScript errors found", state.iterationCount);
+            // Task 2.2: error goes into errorLogs only — developer node re-injects it via system prompt.
+            // Do NOT append to state.messages (prevents error accumulation across iterations).
             return {
                 status: "failed",
-                errorLogs: `Visual QA: Page is blank or nearly empty (${dc.bodyTextLength} chars of text). Check App.tsx exports a proper component tree and all sections render Hebrew content.`,
+                errorLogs: `TypeScript TypeCheck failed:\n${tsResult}`,
                 messages: state.messages,
             };
         }
 
-        const spec = await tools.readFile(state.sandboxPath, "spec.md");
-        const visualResult = await runVisualReview(screenshots, spec);
-        log('QA_VISUAL', 'vision_score', {
-            score: visualResult.score,
-            passed: visualResult.passed,
-            criticalIssues: visualResult.criticalIssues.length,
-            warnings: visualResult.warnings.length,
-            elapsedMs: Date.now() - visualStart,
-        });
+        // --- Phase 2: Next.js Build ---
+        emitter.stepDone("qa_ts", state.iterationCount);
+        emitter.stepStart("qa_build", state.iterationCount);
+        const buildStart = Date.now();
+        const buildResult = await withTimeout(tools.npmRun(state.sandboxPath, "build"), TIMEOUTS.qa_build, 'QA_BUILD');
+        const buildPassed = buildResult.includes("Command executed successfully");
+        log('QA_BUILD', 'result', { passed: buildPassed, elapsedMs: Date.now() - buildStart });
 
-        emitter.score(visualResult.score, visualResult.passed);
+        if (!buildPassed) {
+            emitter.stepFailed("qa_build", "Next.js build errors found", state.iterationCount);
+            return {
+                status: "failed",
+                errorLogs: `Next.js Build failed:\n${buildResult}`,
+                messages: state.messages,
+            };
+        }
 
-        if (visualResult.passed) {
-            log('QA_VISUAL', 'passed', { score: visualResult.score });
+        // --- Phase 3: Visual QA (Screenshots + Vision LLM) ---
+        emitter.stepDone("qa_build", state.iterationCount);
+
+        // Skip visual QA on the last iteration to avoid infinite visual polish loops
+        if (state.iterationCount >= 5) {
+            log('QA_VISUAL', 'skipped', { reason: 'max_iteration', iteration: state.iterationCount });
+            emitter.stepStart("qa_visual", state.iterationCount);
             emitter.stepDone("qa_visual", state.iterationCount);
             return { status: "success", errorLogs: null, messages: state.messages };
         }
 
-        // Visual QA failed — try to refine key components via 21st.dev before handing back to developer
-        const errorReport = formatVisualErrors(visualResult);
-        log('QA_VISUAL', 'failed', { score: visualResult.score, criticalIssues: visualResult.criticalIssues });
-        emitter.stepFailed("qa_visual", `Score: ${visualResult.score}/10`, state.iterationCount);
+        emitter.stepStart("qa_visual", state.iterationCount);
+        const visualStart = Date.now();
+        try {
+            const screenshots = await withTimeout(takeScreenshots(state.sandboxPath), TIMEOUTS.qa_visual, 'QA_VISUAL');
+            log('QA_VISUAL', 'screenshots_taken', {
+                hasScreenshots: !!screenshots,
+                hasDomChecks: !!screenshots?.domChecks,
+                keys: screenshots ? Object.keys(screenshots) : [],
+            });
 
+            const dc = screenshots?.domChecks;
+            if (!dc) {
+                log('QA_VISUAL', 'no_dom_checks', { screenshotKeys: screenshots ? Object.keys(screenshots) : [] });
+                emitter.stepDone("qa_visual", state.iterationCount);
+                return { status: "success", errorLogs: null, messages: state.messages };
+            }
+
+            log('QA_VISUAL', 'dom_checks', {
+                rtl: dc.hasRtlDir,
+                hebrew: dc.hasHebrew,
+                images: dc.imageCount,
+                brokenImages: dc.brokenImages,
+                sections: dc.sectionCount,
+                blank: dc.isBlankPage,
+                textLength: dc.bodyTextLength,
+            });
+
+            // Fast-fail on blank page without spending tokens on vision
+            if (dc.isBlankPage) {
+                log('QA_VISUAL', 'blank_page_fail', { textLength: dc.bodyTextLength });
+                emitter.stepFailed("qa_visual", "Page is blank or nearly empty", state.iterationCount);
+                return {
+                    status: "failed",
+                    errorLogs: `Visual QA: Page is blank or nearly empty (${dc.bodyTextLength} chars of text). Check App.tsx exports a proper component tree and all sections render Hebrew content.`,
+                    messages: state.messages,
+                };
+            }
+
+            const spec = await tools.readFile(state.sandboxPath, "spec.md");
+            const visualResult = await runVisualReview(screenshots, spec);
+            log('QA_VISUAL', 'vision_score', {
+                score: visualResult.score,
+                passed: visualResult.passed,
+                criticalIssues: visualResult.criticalIssues.length,
+                warnings: visualResult.warnings.length,
+                elapsedMs: Date.now() - visualStart,
+            });
+
+            emitter.score(visualResult.score, visualResult.passed);
+
+            if (visualResult.passed) {
+                log('QA_VISUAL', 'passed', { score: visualResult.score });
+                emitter.stepDone("qa_visual", state.iterationCount);
+                return { status: "success", errorLogs: null, messages: state.messages };
+            }
+
+            // Visual QA failed — try to refine key components via 21st.dev before handing back to developer
+            const errorReport = formatVisualErrors(visualResult);
+            log('QA_VISUAL', 'failed', { score: visualResult.score, criticalIssues: visualResult.criticalIssues });
+            emitter.stepFailed("qa_visual", `Score: ${visualResult.score}/10`, state.iterationCount);
+
+            return {
+                status: "failed",
+                errorLogs: `Visual QA failed (score: ${visualResult.score}/10):\n${errorReport}`,
+                messages: state.messages,
+            };
+        } catch (err: any) {
+            // Playwright/screenshot failure is non-blocking — pass with a warning
+            log('QA_VISUAL', 'error_non_blocking', { error: err.message });
+            emitter.stepDone("qa_visual", state.iterationCount);
+            return { status: "success", errorLogs: null, messages: state.messages };
+        }
+    } catch (err: any) {
+        // Top-level catch: TimeoutError from tsc/build, or any unexpected failure
+        log('QA_TS', 'node_error', { error: err.message, name: err.name, elapsedMs: Date.now() - qaStart });
+        emitter.stepFailed("qa_ts", `QA error: ${err.message}`, state.iterationCount);
         return {
             status: "failed",
-            errorLogs: `Visual QA failed (score: ${visualResult.score}/10):\n${errorReport}`,
+            errorLogs: `QA node failed: ${err.message}`,
             messages: state.messages,
         };
-    } catch (err: any) {
-        // Playwright/screenshot failure is non-blocking — pass with a warning
-        log('QA_VISUAL', 'error_non_blocking', { error: err.message });
-        emitter.stepDone("qa_visual", state.iterationCount);
-        return { status: "success", errorLogs: null, messages: state.messages };
     }
-  } catch (err: any) {
-    // Top-level catch: TimeoutError from tsc/build, or any unexpected failure
-    log('QA_TS', 'node_error', { error: err.message, name: err.name, elapsedMs: Date.now() - qaStart });
-    emitter.stepFailed("qa_ts", `QA error: ${err.message}`, state.iterationCount);
-    return {
-        status: "failed",
-        errorLogs: `QA node failed: ${err.message}`,
-        messages: state.messages,
-    };
-  }
 }
 
 /**

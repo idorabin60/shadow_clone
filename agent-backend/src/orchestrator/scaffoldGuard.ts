@@ -10,9 +10,9 @@
 
 export const PROTECTED_FILES = [
     "tailwind.config.js",
-    "next.config.ts",
+    "next.config.mjs",
     "tsconfig.json",
-    "postcss.config.mjs",
+    "postcss.config.js",
     "src/app/layout.tsx",
     "src/app/not-found.tsx",
     "src/app/error.tsx",

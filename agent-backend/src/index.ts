@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
+import "dotenv/config";
 
 // ‼️ Fix for ts-node loading LangChain core modules which expect Web Streams to be globally available
 if (typeof global.ReadableStream === 'undefined') {
@@ -14,10 +14,13 @@ import { supabase } from "./db/supabase";
 import { eventStorage, emitter } from "./orchestrator/emitter";
 import type { SSEEvent } from "./orchestrator/events";
 
-dotenv.config();
-
 const app = express();
 const PORT = process.env.PORT || 4000;
+
+console.log('========================================================================');
+console.log(`[BOOT] Server starting on PORT ${PORT}`);
+console.log(`[BOOT] Environment: ANTHROPIC_API_KEY is ${process.env.ANTHROPIC_API_KEY ? 'PRESENT' : 'MISSING'}`);
+console.log('========================================================================');
 
 app.use(cors());
 app.use(express.json());

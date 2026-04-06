@@ -28,6 +28,7 @@ function WorkspaceContent() {
     const router = useRouter();
     // Read prompt from sessionStorage once (avoids RTL/bidi URL mangling).
     // useState lazy init ensures it survives re-renders after sessionStorage is cleared.
+    const projectIdParam = searchParams.get("projectId");
     const rawPrompt = searchParams.get("prompt") || "";
     const [initialPrompt] = useState(() => {
         if (rawPrompt === "session" && typeof window !== "undefined") {
@@ -36,6 +37,7 @@ function WorkspaceContent() {
                 sessionStorage.removeItem("shadow_clone_prompt");
                 return stored;
             }
+            return "";
         }
         return rawPrompt;
     });
@@ -137,11 +139,28 @@ function WorkspaceContent() {
                     .select('*')
                     .eq('user_id', user.id)
                     .order('created_at', { ascending: false });
-                if (data) setProjects(data);
+                if (data) {
+                    setProjects(data);
+
+                    if (projectIdParam && !hasStartedInitialGen.current && !initialPrompt) {
+                        hasStartedInitialGen.current = true;
+                        const proj = data.find(p => p.id === projectIdParam);
+                        if (proj) {
+                            setSandboxId(proj.id);
+                            setChatMessages([{ role: "agent", content: `טוען פרויקט: ${proj.name}`, timestamp: new Date() }]);
+                            const { data: dbData } = await supabase.from('projects').select('files').eq('id', proj.id).single();
+                            if (dbData?.files) {
+                                mountAndRun(dbData.files).then(() => {
+                                    setChatMessages(prev => [...prev, { role: "agent", content: "הפרויקט נטען בהצלחה!", timestamp: new Date() }]);
+                                });
+                            }
+                        }
+                    }
+                }
             }
         };
         fetchProjects();
-    }, []);
+    }, [projectIdParam, initialPrompt]);
 
     // Auto-scroll chat
     useEffect(() => {
@@ -281,6 +300,9 @@ function WorkspaceContent() {
 
             const { sandboxId: newSandboxId } = await response.json();
             setSandboxId(newSandboxId);
+            if (newProjectId) {
+                window.history.replaceState(null, '', `/workspace?projectId=${newProjectId}`);
+            }
 
             subscribeSSE(
                 `http://localhost:4000/api/orchestrate/stream/${newSandboxId}`,
@@ -387,6 +409,7 @@ function WorkspaceContent() {
                                             key={proj.id}
                                             onClick={async () => {
                                                 setShowProjectSwitcher(false);
+                                                window.history.pushState(null, '', `/workspace?projectId=${proj.id}`);
                                                 setSandboxId(proj.id);
                                                 setSteps([]);
                                                 setChatMessages([{ role: "agent", content: `טוען פרויקט: ${proj.name}`, timestamp: new Date() }]);

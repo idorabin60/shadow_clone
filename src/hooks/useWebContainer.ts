@@ -94,7 +94,9 @@ export function useWebContainer() {
         setInstalling(false);
 
         // 3. Run Dev Server
-        const startProcess = await instance.spawn('npm', ['run', 'dev']);
+        const startProcess = await instance.spawn('npm', ['run', 'dev'], {
+            env: { NEXT_TELEMETRY_DISABLED: '1' }
+        });
         startProcess.output.pipeTo(new WritableStream({
             write(data) {
                 setLogs(prev => [...prev.slice(-40), data.trim()].filter(Boolean));

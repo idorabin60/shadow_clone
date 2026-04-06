@@ -73,8 +73,8 @@ export async function withTimeout<T>(
 
 const COST_PER_1M: Record<string, { input: number; output: number }> = {
     'claude-sonnet-4-6': { input: 3.0, output: 15.0 },
-    'claude-opus-4-6':   { input: 15.0, output: 75.0 },
-    'gpt-4o':            { input: 2.5, output: 10.0 },
+    'claude-opus-4-6': { input: 15.0, output: 75.0 },
+    'gpt-4o': { input: 2.5, output: 10.0 },
 };
 
 export interface TokenUsage {
