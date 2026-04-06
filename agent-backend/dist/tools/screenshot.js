@@ -9,12 +9,14 @@ const VIEWPORTS = [
     { name: "desktopFullPage", width: 1440, height: 900, fullPage: true },
 ];
 /**
- * Starts the Vite preview server in the sandbox and waits for it to be ready.
+ * Starts the Next.js production server in the sandbox and waits for it to be ready.
+ * Requires `next build` to have been run first.
  * Returns the child process and the resolved URL.
  */
 function startPreviewServer(sandboxPath) {
     return new Promise((resolve, reject) => {
-        const serverProcess = (0, child_process_1.spawn)("npx", ["vite", "preview", "--port", "0", "--host", "127.0.0.1"], {
+        // Use port 0 to get a random free port
+        const serverProcess = (0, child_process_1.spawn)("npx", ["next", "start", "--port", "0", "--hostname", "127.0.0.1"], {
             cwd: sandboxPath,
             stdio: ["ignore", "pipe", "pipe"],
             env: { ...process.env, NODE_ENV: "production" },
@@ -23,12 +25,12 @@ function startPreviewServer(sandboxPath) {
         let stderr = "";
         const timeout = setTimeout(() => {
             serverProcess.kill("SIGTERM");
-            reject(new Error(`Preview server did not start within 15s.\nstdout: ${stdout}\nstderr: ${stderr}`));
-        }, 15000);
+            reject(new Error(`Preview server did not start within 20s.\nstdout: ${stdout}\nstderr: ${stderr}`));
+        }, 20000);
         serverProcess.stdout?.on("data", (data) => {
             const chunk = data.toString();
             stdout += chunk;
-            // Vite preview outputs something like: ➜  Local:   http://localhost:4173/
+            // Next.js start outputs: ✓ Ready in Xs — http://localhost:3000
             const urlMatch = stdout.match(/https?:\/\/[^\s]+/);
             if (urlMatch) {
                 clearTimeout(timeout);
@@ -76,7 +78,7 @@ async function runDomChecks(page) {
  * Starts a Vite preview server, captures with Playwright, then cleans up.
  */
 async function takeScreenshots(sandboxPath) {
-    console.log("   └─ 📸 Starting Vite preview server for screenshots...");
+    console.log("   └─ 📸 Starting Next.js preview server for screenshots...");
     let serverProcess = null;
     let browser = null;
     try {

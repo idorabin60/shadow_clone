@@ -37,16 +37,23 @@ export class SandboxManager {
                 filter: (src) => !src.includes('node_modules') && !src.includes('.git')
             });
 
-            // 1b. Symlink the node_modules from the scaffold dir to save space and speed up Vite build
+            // 1b. Copy node_modules from the scaffold dir so each sandbox can install additional packages
             const scaffoldNodeModules = path.join(this.scaffoldDir, 'node_modules');
             const sandboxNodeModules = path.join(sandboxPath, 'node_modules');
             try {
-                // Check if node_modules exists in scaffold first to avoid crashing
                 await fs.access(scaffoldNodeModules);
-                await fs.symlink(scaffoldNodeModules, sandboxNodeModules, 'dir');
-                console.log(`[Sandbox] Symlinked node_modules for ${sandboxId}`);
+                await fs.cp(scaffoldNodeModules, sandboxNodeModules, { recursive: true });
+                // Also copy package.json and package-lock.json so npm install works correctly
+                await fs.copyFile(
+                    path.join(this.scaffoldDir, 'package.json'),
+                    path.join(sandboxPath, 'package.json')
+                ).catch(() => {});
+                const lockSrc = path.join(this.scaffoldDir, 'package-lock.json');
+                const lockDst = path.join(sandboxPath, 'package-lock.json');
+                await fs.copyFile(lockSrc, lockDst).catch(() => {});
+                console.log(`[Sandbox] Copied node_modules for ${sandboxId}`);
             } catch (e) {
-                console.log(`[Sandbox] No node_modules in scaffold. Symlink skipped.`);
+                console.log(`[Sandbox] No node_modules in scaffold. Copy skipped.`);
             }
 
             // 2. We don't necessarily run npm install every time if we can share node_modules 
@@ -113,7 +120,7 @@ export class SandboxManager {
         async function readDir(dir: string, base: string) {
             const entries = await fs.readdir(dir, { withFileTypes: true });
             for (const entry of entries) {
-                if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
+                if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' || entry.name === '.next') continue;
                 const fullPath = path.join(dir, entry.name);
                 if (entry.isDirectory()) {
                     await readDir(fullPath, base);

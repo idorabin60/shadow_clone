@@ -108,10 +108,8 @@ Both servers must run simultaneously for the app to work.
 
 ## Do NOT
 
-- Add npm dependencies to `scaffold/` unless absolutely necessary (they get symlinked, not installed per-sandbox).
 - Refactor the LangGraph state machine shape without understanding all conditional edges and the `routeAfterQA` function.
 - Change model names or parameters without explicit request — these are tuned for cost/quality tradeoffs.
-- Rewrite `graph.ts` wholesale — it is the core of the product. Use surgical edits.
 - Mix up `console.log` patterns in graph nodes — the frontend parses these for SSE streaming.
 
 ## Working with graph.ts

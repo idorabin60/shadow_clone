@@ -10,6 +10,11 @@ export type { VisualQAResult } from './visualReview';
 
 const execAsync = promisify(exec);
 
+// Next.js 15 requires Node 18+. The system default may be older (e.g. Node 16 via nvm default).
+// Prepend Node 22 to PATH so all sandbox commands use the right version.
+const NODE22_BIN = '/Users/idorabin/.nvm/versions/node/v22.20.0/bin';
+const SANDBOX_ENV = { ...process.env, PATH: `${NODE22_BIN}:${process.env.PATH}` };
+
 export type Operation =
     | { type: "write"; path: string; content: string }
     | { type: "edit"; path: string; find: string; replace: string }
@@ -179,7 +184,7 @@ export const tools = {
 
         try {
             // Execute npm install inside the isolated sandbox directory
-            const { stdout, stderr } = await execAsync(`npm install ${safePackages.join(" ")}`, { cwd: sandboxPath });
+            const { stdout, stderr } = await execAsync(`npm install ${safePackages.join(" ")}`, { cwd: sandboxPath, env: SANDBOX_ENV });
             return `Successfully installed ${safePackages.join(", ")}.\nOutput:\n${stdout}`;
         } catch (err: any) {
             return `Failed to install packages: ${err.message}\n${err.stdout ? 'Output:\n' + err.stdout : ''}`;
@@ -198,10 +203,10 @@ export const tools = {
         }
 
         try {
-            const { stdout, stderr } = await execAsync(`npm run ${script}`, { cwd: sandboxPath });
+            const { stdout, stderr } = await execAsync(`npm run ${script}`, { cwd: sandboxPath, env: SANDBOX_ENV });
             return `Command executed successfully.\nOutput:\n${stdout}`;
         } catch (err: any) {
-            return `Command failed: ${err.message}\n${err.stdout ? 'Output:\n' + err.stdout : ''}`;
+            return `Command failed: ${err.message}\n${err.stdout ? 'stdout:\n' + err.stdout : ''}${err.stderr ? '\nstderr:\n' + err.stderr : ''}`;
         }
     },
 
@@ -211,7 +216,7 @@ export const tools = {
     async runTypeScript(sandboxPath: string): Promise<string> {
         try {
             // Run tsc --noEmit to only typecheck
-            const { stdout, stderr } = await execAsync('npx tsc --noEmit', { cwd: sandboxPath });
+            const { stdout, stderr } = await execAsync('npx tsc --noEmit', { cwd: sandboxPath, env: SANDBOX_ENV });
             return "Success: TypeScript compilation passed with 0 errors.";
         } catch (err: any) {
             // tsc throws an error if compilation fails

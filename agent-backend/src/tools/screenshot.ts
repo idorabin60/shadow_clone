@@ -2,6 +2,9 @@ import { chromium, type Browser, type Page } from "playwright";
 import { spawn, type ChildProcess } from "child_process";
 import path from "path";
 
+const NODE22_BIN = '/Users/idorabin/.nvm/versions/node/v22.20.0/bin';
+const SANDBOX_ENV = { ...process.env, PATH: `${NODE22_BIN}:${process.env.PATH}` };
+
 export interface DomChecks {
     hasRtlDir: boolean;
     hasHebrew: boolean;
@@ -34,28 +37,30 @@ const VIEWPORTS: Viewport[] = [
 ];
 
 /**
- * Starts the Vite preview server in the sandbox and waits for it to be ready.
+ * Starts the Next.js production server in the sandbox and waits for it to be ready.
+ * Requires `next build` to have been run first.
  * Returns the child process and the resolved URL.
  */
 function startPreviewServer(sandboxPath: string): Promise<{ process: ChildProcess; url: string }> {
     return new Promise((resolve, reject) => {
-        const serverProcess = spawn("npx", ["vite", "preview", "--port", "0", "--host", "127.0.0.1"], {
+        // Use port 0 to get a random free port
+        const serverProcess = spawn("npx", ["next", "start", "--port", "0", "--hostname", "127.0.0.1"], {
             cwd: sandboxPath,
             stdio: ["ignore", "pipe", "pipe"],
-            env: { ...process.env, NODE_ENV: "production" },
+            env: { ...SANDBOX_ENV, NODE_ENV: "production" },
         });
 
         let stdout = "";
         let stderr = "";
         const timeout = setTimeout(() => {
             serverProcess.kill("SIGTERM");
-            reject(new Error(`Preview server did not start within 15s.\nstdout: ${stdout}\nstderr: ${stderr}`));
-        }, 15000);
+            reject(new Error(`Preview server did not start within 20s.\nstdout: ${stdout}\nstderr: ${stderr}`));
+        }, 20000);
 
         serverProcess.stdout?.on("data", (data: Buffer) => {
             const chunk = data.toString();
             stdout += chunk;
-            // Vite preview outputs something like: ➜  Local:   http://localhost:4173/
+            // Next.js start outputs: ✓ Ready in Xs — http://localhost:3000
             const urlMatch = stdout.match(/https?:\/\/[^\s]+/);
             if (urlMatch) {
                 clearTimeout(timeout);
@@ -86,7 +91,7 @@ function startPreviewServer(sandboxPath: string): Promise<{ process: ChildProces
  * The JS string is evaluated in the browser context (not compiled by Node's TS).
  */
 async function runDomChecks(page: Page): Promise<DomChecks> {
-    const domScript = `() => {
+    const domScript = `(() => {
         const bodyText = document.body.innerText || "";
         const imgs = Array.from(document.querySelectorAll("img"));
         return {
@@ -99,7 +104,7 @@ async function runDomChecks(page: Page): Promise<DomChecks> {
             isBlankPage: bodyText.trim().length < 50,
             bodyTextLength: bodyText.trim().length,
         };
-    }`;
+    })()`;
     return await page.evaluate(domScript) as DomChecks;
 }
 
@@ -108,7 +113,7 @@ async function runDomChecks(page: Page): Promise<DomChecks> {
  * Starts a Vite preview server, captures with Playwright, then cleans up.
  */
 export async function takeScreenshots(sandboxPath: string): Promise<ScreenshotResult> {
-    console.log("   └─ 📸 Starting Vite preview server for screenshots...");
+    console.log("   └─ 📸 Starting Next.js preview server for screenshots...");
 
     let serverProcess: ChildProcess | null = null;
     let browser: Browser | null = null;

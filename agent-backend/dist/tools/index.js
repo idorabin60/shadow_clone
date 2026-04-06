@@ -14,6 +14,10 @@ var visualReview_1 = require("./visualReview");
 Object.defineProperty(exports, "runVisualReview", { enumerable: true, get: function () { return visualReview_1.runVisualReview; } });
 Object.defineProperty(exports, "formatVisualErrors", { enumerable: true, get: function () { return visualReview_1.formatVisualErrors; } });
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
+// Next.js 15 requires Node 18+. The system default may be older (e.g. Node 16 via nvm default).
+// Prepend Node 22 to PATH so all sandbox commands use the right version.
+const NODE22_BIN = '/Users/idorabin/.nvm/versions/node/v22.20.0/bin';
+const SANDBOX_ENV = { ...process.env, PATH: `${NODE22_BIN}:${process.env.PATH}` };
 exports.tools = {
     /**
      * Safe wrapper to read files only within the sandbox directory
@@ -166,7 +170,7 @@ exports.tools = {
         }
         try {
             // Execute npm install inside the isolated sandbox directory
-            const { stdout, stderr } = await execAsync(`npm install ${safePackages.join(" ")}`, { cwd: sandboxPath });
+            const { stdout, stderr } = await execAsync(`npm install ${safePackages.join(" ")}`, { cwd: sandboxPath, env: SANDBOX_ENV });
             return `Successfully installed ${safePackages.join(", ")}.\nOutput:\n${stdout}`;
         }
         catch (err) {
@@ -183,11 +187,11 @@ exports.tools = {
             return `Security Error: Script '${script}' is not in the allowlist. Allowed scripts are: ${allowedScripts.join(", ")}`;
         }
         try {
-            const { stdout, stderr } = await execAsync(`npm run ${script}`, { cwd: sandboxPath });
+            const { stdout, stderr } = await execAsync(`npm run ${script}`, { cwd: sandboxPath, env: SANDBOX_ENV });
             return `Command executed successfully.\nOutput:\n${stdout}`;
         }
         catch (err) {
-            return `Command failed: ${err.message}\n${err.stdout ? 'Output:\n' + err.stdout : ''}`;
+            return `Command failed: ${err.message}\n${err.stdout ? 'stdout:\n' + err.stdout : ''}${err.stderr ? '\nstderr:\n' + err.stderr : ''}`;
         }
     },
     /**
@@ -196,7 +200,7 @@ exports.tools = {
     async runTypeScript(sandboxPath) {
         try {
             // Run tsc --noEmit to only typecheck
-            const { stdout, stderr } = await execAsync('npx tsc --noEmit', { cwd: sandboxPath });
+            const { stdout, stderr } = await execAsync('npx tsc --noEmit', { cwd: sandboxPath, env: SANDBOX_ENV });
             return "Success: TypeScript compilation passed with 0 errors.";
         }
         catch (err) {

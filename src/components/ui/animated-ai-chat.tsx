@@ -263,7 +263,9 @@ export function AnimatedAIChat() {
     const handleSendMessage = () => {
         if (value.trim()) {
             setIsTyping(true);
-            router.push(`/workspace?prompt=${encodeURIComponent(value.trim())}`);
+            // Store prompt in sessionStorage to avoid RTL/bidi mangling in URL encoding
+            sessionStorage.setItem('shadow_clone_prompt', value.trim());
+            router.push(`/workspace?prompt=session`);
         }
     };
 
@@ -374,6 +376,7 @@ export function AnimatedAIChat() {
                         <div className="p-4">
                             <Textarea
                                 ref={textareaRef}
+                                dir="auto"
                                 value={value}
                                 onChange={(e) => {
                                     setValue(e.target.value);

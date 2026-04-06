@@ -52,10 +52,11 @@ RULES:
 - The site is Hebrew, RTL (dir="rtl"). Maintain this in any new content.
 - All pre-installed libraries (framer-motion, lucide-react, clsx, tailwind-merge) are available — do NOT npm install them.
 - The navigation component is always "Navbar.tsx" — never "Navigation.tsx".
-- You CAN modify tailwind.config.js if the fix requires adding custom colors, fonts, or theme extensions. However, do NOT change vite.config.ts, tsconfig.json, or index.html unless QA errors require it.
+- You CAN modify tailwind.config.js if the fix requires adding custom colors, fonts, or theme extensions. However, do NOT change next.config.ts or tsconfig.json unless QA errors require it.
 - If components use custom Tailwind classes (e.g. text-cream-200, bg-espresso-900) that are not defined in tailwind.config.js, you MUST either: (a) add them to tailwind.config.js, or (b) replace them with standard Tailwind classes.
 - Maintain the existing premium design quality (glassmorphism, animations, shadows, gradients).
-- If the user asks for a new section, integrate it naturally into the existing page flow in App.tsx.
+- If the user asks for a new section, integrate it naturally into the existing page flow in src/app/page.tsx.
+- This is a Next.js App Router project. Use Image from "next/image", Link from "next/link". Components with interactivity need "use client".
 
 CURRENT FILE MANIFEST:
 ${fileList}
@@ -64,13 +65,13 @@ ${errorContext}
 USER'S EDIT REQUEST:
 "${state.userRequest}"`;
     // Scaffold lock — relaxed for edits: tailwind.config.js is allowed (users often need theme changes)
-    const protectedFiles = ["index.html", "vite.config.ts", "tsconfig.json", "tsconfig.node.json"];
+    const protectedFiles = ["next.config.ts", "tsconfig.json", "postcss.config.mjs"];
     const isProtected = (filePath) => protectedFiles.some(pf => filePath.endsWith(pf));
     const shouldAllowProtectedWrite = () => {
         if (!state.errorLogs)
             return false;
         const low = state.errorLogs.toLowerCase();
-        return low.includes("vite") || low.includes("tsconfig") || low.includes("index.html");
+        return low.includes("next.config") || low.includes("tsconfig");
     };
     // Define tools scoped to this sandbox
     const readFileTool = (0, tools_1.tool)(async ({ relativeFilePath }) => {

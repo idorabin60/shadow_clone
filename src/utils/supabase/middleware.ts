@@ -31,7 +31,17 @@ export async function updateSession(request: NextRequest) {
     // We do not intercept it here to prevent stripping the code from the URL cleanly.
 
     // Fetch the user to refresh the auth token if needed
-    const { data: { user } } = await supabase.auth.getUser()
+    // Wrap in a timeout so the page doesn't hang if Supabase is unreachable
+    let user = null
+    try {
+        const result = await Promise.race([
+            supabase.auth.getUser(),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Supabase auth timeout')), 5000))
+        ])
+        user = result.data.user
+    } catch {
+        // Supabase unreachable — treat as unauthenticated
+    }
     const isAuthPage = request.nextUrl.pathname.startsWith('/login') || request.nextUrl.pathname.startsWith('/signup')
 
     // Bypass auth check and redirect logic for auth callback routes

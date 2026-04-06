@@ -19,6 +19,7 @@ import { z } from "zod";
 import { tools } from "../tools";
 import { emitter } from "./emitter";
 import { log } from "../lib/logger";
+import { searchComponents, refineComponent } from "./magicClient";
 
 export function createDevTools(
     sandboxPath: string,
@@ -92,7 +93,56 @@ export function createDevTools(
         }
     );
 
-    const agentTools = [readFileTool, listFilesTool, npmInstallTool];
+    const searchComponentsTool = tool(
+        async ({ query }) => {
+            emitter.toolInvoked("developer", "search_components");
+            log('TOOLS', 'search_components', { query });
+            const result = await searchComponents(query);
+            if (result.results.length === 0) {
+                return `No components found for "${query}". Try a different search query.`;
+            }
+            // Return structured results the LLM can act on (sandbox is Next.js — no stripping needed)
+            const formatted = result.results.map((r, i) => {
+                const depsNote = r.dependencies.length > 0
+                    ? `\nDependencies: ${r.dependencies.join(', ')}`
+                    : '';
+                return `--- Result ${i + 1}: ${r.name} ---${depsNote}\n\`\`\`tsx\n${r.code.slice(0, 4000)}\n\`\`\``;
+            }).join('\n\n');
+            log('TOOLS', 'search_components_done', { query, results: result.results.length });
+            return `Found ${result.results.length} component(s) for "${query}":\n\n${formatted}`;
+        },
+        {
+            name: "search_components",
+            description: "Search 21st.dev component library for UI inspiration. Returns real component code you can adapt. Use descriptive queries like 'hero section dark glassmorphism', 'pricing table modern cards', 'testimonials carousel premium'.",
+            schema: z.object({
+                query: z.string().describe("Search query describing the component you want, e.g. 'navbar dark premium animated'"),
+            }),
+        }
+    );
+
+    const refineComponentTool = tool(
+        async ({ code, feedback, context }) => {
+            emitter.toolInvoked("developer", "refine_component");
+            log('TOOLS', 'refine_component', { feedbackChars: feedback.length, codeChars: code.length });
+            const refined = await refineComponent(code, feedback, context ?? '');
+            if (!refined) {
+                return "Refinement failed or unavailable. Apply the improvements manually.";
+            }
+            log('TOOLS', 'refine_component_done', { refinedChars: refined.length });
+            return `Refined component:\n\`\`\`tsx\n${refined}\n\`\`\``;
+        },
+        {
+            name: "refine_component",
+            description: "Send a component to 21st.dev for AI-powered refinement. Provide the current code and feedback on what to improve (e.g. 'make the hover effects more dramatic', 'add glassmorphism cards').",
+            schema: z.object({
+                code: z.string().describe("Current component source code"),
+                feedback: z.string().describe("What to improve about the component"),
+                context: z.string().optional().describe("Additional context (design style, colors, etc.)"),
+            }),
+        }
+    );
+
+    const agentTools = [readFileTool, listFilesTool, npmInstallTool, searchComponentsTool, refineComponentTool];
     const toolsByName = Object.fromEntries(agentTools.map(t => [t.name, t]));
 
     return { agentTools, toolsByName };

@@ -41,8 +41,19 @@ app.get("/health", (req, res) => {
  * Triggers the graph and streams structured events back to the frontend.
  */
 app.post("/api/orchestrate", async (req, res) => {
-    const businessInput = req.body;
+    let businessInput = req.body;
     const { projectId } = req.body;
+    // If the frontend wrapped JSON in the description field (RTL textarea can mangle JSON),
+    // try to extract the real structured input from description.
+    if (businessInput?.description) {
+        try {
+            const parsed = JSON.parse(businessInput.description);
+            if (parsed && typeof parsed === 'object' && parsed.businessName) {
+                businessInput = { ...parsed, projectId };
+            }
+        }
+        catch { /* description is plain text, not JSON — continue normally */ }
+    }
     if (!businessInput || !businessInput.businessName) {
         return res.status(400).json({ error: "Missing businessInput" });
     }

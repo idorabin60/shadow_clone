@@ -37,17 +37,21 @@ class SandboxManager {
                 recursive: true,
                 filter: (src) => !src.includes('node_modules') && !src.includes('.git')
             });
-            // 1b. Symlink the node_modules from the scaffold dir to save space and speed up Vite build
+            // 1b. Copy node_modules from the scaffold dir so each sandbox can install additional packages
             const scaffoldNodeModules = path_1.default.join(this.scaffoldDir, 'node_modules');
             const sandboxNodeModules = path_1.default.join(sandboxPath, 'node_modules');
             try {
-                // Check if node_modules exists in scaffold first to avoid crashing
                 await promises_1.default.access(scaffoldNodeModules);
-                await promises_1.default.symlink(scaffoldNodeModules, sandboxNodeModules, 'dir');
-                console.log(`[Sandbox] Symlinked node_modules for ${sandboxId}`);
+                await promises_1.default.cp(scaffoldNodeModules, sandboxNodeModules, { recursive: true });
+                // Also copy package.json and package-lock.json so npm install works correctly
+                await promises_1.default.copyFile(path_1.default.join(this.scaffoldDir, 'package.json'), path_1.default.join(sandboxPath, 'package.json')).catch(() => { });
+                const lockSrc = path_1.default.join(this.scaffoldDir, 'package-lock.json');
+                const lockDst = path_1.default.join(sandboxPath, 'package-lock.json');
+                await promises_1.default.copyFile(lockSrc, lockDst).catch(() => { });
+                console.log(`[Sandbox] Copied node_modules for ${sandboxId}`);
             }
             catch (e) {
-                console.log(`[Sandbox] No node_modules in scaffold. Symlink skipped.`);
+                console.log(`[Sandbox] No node_modules in scaffold. Copy skipped.`);
             }
             // 2. We don't necessarily run npm install every time if we can share node_modules 
             // or use a global installation, but for total isolation, running a fast install is safer.

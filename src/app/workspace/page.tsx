@@ -26,7 +26,19 @@ interface ChatMessage {
 function WorkspaceContent() {
     const searchParams = useSearchParams();
     const router = useRouter();
-    const initialPrompt = searchParams.get("prompt") || "";
+    // Read prompt from sessionStorage once (avoids RTL/bidi URL mangling).
+    // useState lazy init ensures it survives re-renders after sessionStorage is cleared.
+    const rawPrompt = searchParams.get("prompt") || "";
+    const [initialPrompt] = useState(() => {
+        if (rawPrompt === "session" && typeof window !== "undefined") {
+            const stored = sessionStorage.getItem("shadow_clone_prompt");
+            if (stored) {
+                sessionStorage.removeItem("shadow_clone_prompt");
+                return stored;
+            }
+        }
+        return rawPrompt;
+    });
 
     const [isLoading, setIsLoading] = useState(false);
     const [sandboxId, setSandboxId] = useState<string | null>(null);
@@ -173,14 +185,8 @@ function WorkspaceContent() {
         }
     }, [initialPrompt, hasStartedInitialGen]);
 
-    useEffect(() => {
-        if (devServerUrl && initialPrompt && sandboxId) {
-            localStorage.setItem(`shadow_clone_gen_${initialPrompt}`, JSON.stringify({
-                hasFiles: true,
-                sandboxId,
-            }));
-        }
-    }, [devServerUrl, initialPrompt, sandboxId]);
+    // Cache is now saved inside subscribeSSE onDone callbacks (generateLandingPage)
+    // so it persists as soon as files are confirmed in Supabase, not when Vite starts.
 
     const subscribeSSE = useCallback((sseUrl: string, onDone: (projectId: string) => void) => {
         const eventSource = new EventSource(sseUrl);
@@ -219,14 +225,33 @@ function WorkspaceContent() {
         setError(null);
         setSteps(initSteps(CREATE_STEPS));
 
-        const inputData: BusinessInput = {
-            businessName: "העסק שלי",
-            businessType: "כללי",
-            description: text,
-            uniqueSellingProposition: "שירות מקצועי.",
-            services: [],
-            tone: "professional"
-        };
+        // If user pasted JSON with businessName, use it directly.
+        // Otherwise wrap free text in a default structure.
+        let inputData: Record<string, unknown>;
+        let projectName = text.slice(0, 80);
+        try {
+            const parsed = JSON.parse(text);
+            if (parsed && typeof parsed === 'object' && parsed.businessName) {
+                inputData = parsed;
+                projectName = parsed.businessName;
+            } else {
+                throw new Error('no businessName');
+            }
+        } catch {
+            // Free text — extract first meaningful phrase as business name
+            const firstLine = text.split(/[\n.،,\-–—]/)[0].trim();
+            const businessName = firstLine.length > 2 && firstLine.length < 60
+                ? firstLine
+                : text.slice(0, 50);
+            projectName = businessName;
+            inputData = {
+                businessName,
+                businessType: "כללי",
+                description: text,
+                services: [],
+                tone: "professional"
+            };
+        }
 
         let newProjectId: string | undefined;
 
@@ -235,7 +260,7 @@ function WorkspaceContent() {
             if (user) {
                 const { data, error: dbError } = await supabase
                     .from('projects')
-                    .insert({ name: text, user_id: user.id })
+                    .insert({ name: projectName, user_id: user.id })
                     .select('id')
                     .single();
                 if (data) {
@@ -260,6 +285,13 @@ function WorkspaceContent() {
             subscribeSSE(
                 `http://localhost:4000/api/orchestrate/stream/${newSandboxId}`,
                 async (projectId) => {
+                    // Cache immediately — files are in Supabase, no need to wait for Vite
+                    if (initialPrompt) {
+                        localStorage.setItem(`shadow_clone_gen_${initialPrompt}`, JSON.stringify({
+                            hasFiles: true,
+                            sandboxId: projectId,
+                        }));
+                    }
                     const { data: projData } = await supabase.from('projects').select('files').eq('id', projectId).single();
                     if (projData?.files) {
                         await mountAndRun(projData.files);

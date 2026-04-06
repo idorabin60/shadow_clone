@@ -111,7 +111,7 @@ export function useWebContainer() {
 
     /**
      * Lightweight file update for edits — just writes changed files to the WebContainer.
-     * Vite HMR picks up the changes automatically, no reinstall or server restart needed.
+     * Next.js Fast Refresh picks up the changes automatically, no reinstall or server restart needed.
      */
     const updateFiles = useCallback(async (files: Record<string, string>) => {
         const instance = webcontainerInstance;
