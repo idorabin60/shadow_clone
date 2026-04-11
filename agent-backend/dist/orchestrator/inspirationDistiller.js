@@ -77,13 +77,13 @@ const SCAFFOLD_PACKAGES = new Set([
  *
  * @returns Map of componentName -> InspirationBrief
  */
-async function distillInspiration(components, sandboxPath) {
+async function distillInspiration(components, sandboxPath, designSystem) {
     const startMs = Date.now();
     (0, logger_1.log)('DISTILL', 'start', { components: components.length });
     emitter_1.emitter.info("developer", `Searching 21st.dev for ${components.length} component references...`);
     // ── Step 1: Search 21st.dev for all components in parallel ──────────
     const searchTasks = components.map(comp => {
-        const query = (0, specParser_1.getSearchQuery)(comp.componentName);
+        const query = (0, specParser_1.getSearchQuery)(comp.componentName, designSystem);
         return (0, magicClient_1.searchComponents)(query);
     });
     const searchResults = await Promise.allSettled(searchTasks);

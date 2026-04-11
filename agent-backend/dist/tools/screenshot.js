@@ -3,6 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.takeScreenshots = takeScreenshots;
 const playwright_1 = require("playwright");
 const child_process_1 = require("child_process");
+const NODE22_BIN = '/Users/idorabin/.nvm/versions/node/v22.20.0/bin';
+const SANDBOX_ENV = { ...process.env, PATH: `${NODE22_BIN}:${process.env.PATH}` };
 const VIEWPORTS = [
     { name: "desktop", width: 1440, height: 900, fullPage: false },
     { name: "mobile", width: 375, height: 812, fullPage: false },
@@ -19,7 +21,7 @@ function startPreviewServer(sandboxPath) {
         const serverProcess = (0, child_process_1.spawn)("npx", ["next", "start", "--port", "0", "--hostname", "127.0.0.1"], {
             cwd: sandboxPath,
             stdio: ["ignore", "pipe", "pipe"],
-            env: { ...process.env, NODE_ENV: "production" },
+            env: { ...SANDBOX_ENV, NODE_ENV: "production" },
         });
         let stdout = "";
         let stderr = "";
@@ -57,7 +59,7 @@ function startPreviewServer(sandboxPath) {
  * The JS string is evaluated in the browser context (not compiled by Node's TS).
  */
 async function runDomChecks(page) {
-    const domScript = `() => {
+    const domScript = `(() => {
         const bodyText = document.body.innerText || "";
         const imgs = Array.from(document.querySelectorAll("img"));
         return {
@@ -70,7 +72,7 @@ async function runDomChecks(page) {
             isBlankPage: bodyText.trim().length < 50,
             bodyTextLength: bodyText.trim().length,
         };
-    }`;
+    })()`;
     return await page.evaluate(domScript);
 }
 /**

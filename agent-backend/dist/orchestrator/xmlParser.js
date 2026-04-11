@@ -18,7 +18,7 @@ const scaffoldGuard_1 = require("./scaffoldGuard");
 // Load-bearing regex — do not change without reading the CLAUDE.md warning.
 // Matches: <file path="src/Foo.tsx"> ... </file> with optional whitespace after the tag.
 const FILE_REGEX = /<file[^>]*path=["']([^"']+)["'][^>]*>\n*([\s\S]*?)\n*<\/file>/gi;
-function parseXmlFiles(rawContent, errorLogs) {
+function parseXmlFiles(rawContent, errorLogs, iterationCount) {
     const files = [];
     const guardErrors = [];
     let strippedContent = rawContent;
@@ -37,7 +37,7 @@ function parseXmlFiles(rawContent, errorLogs) {
             continue;
         }
         // Guard 2: Scaffold Lock
-        if ((0, scaffoldGuard_1.isProtected)(filePath) && !(0, scaffoldGuard_1.shouldAllowProtectedWrite)(errorLogs)) {
+        if ((0, scaffoldGuard_1.isProtected)(filePath) && !(0, scaffoldGuard_1.shouldAllowProtectedWrite)(errorLogs, filePath, iterationCount)) {
             (0, logger_1.log)('GUARD', 'scaffold_blocked', { path: filePath });
             guardErrors.push(`Modification to protected file '${filePath}' is blocked. Only touch src/ application files.`);
             strippedContent = strippedContent.replace(match[0], `<file path="${filePath}">[BLOCKED: scaffold lock]</file>`);

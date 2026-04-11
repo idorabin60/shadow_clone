@@ -109,7 +109,7 @@ class SandboxManager {
         async function readDir(dir, base) {
             const entries = await promises_1.default.readdir(dir, { withFileTypes: true });
             for (const entry of entries) {
-                if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist')
+                if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' || entry.name === '.next')
                     continue;
                 const fullPath = path_1.default.join(dir, entry.name);
                 if (entry.isDirectory()) {

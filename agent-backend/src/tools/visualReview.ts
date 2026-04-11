@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { DomChecks, ScreenshotResult } from "./screenshot";
+import type { DesignSystemRecommendation } from "../orchestrator/designSystem";
 
 export interface VisualQAResult {
     passed: boolean;
@@ -29,6 +30,10 @@ function validateDomChecks(domChecks: DomChecks): string[] {
         failures.push("CRITICAL: Page is blank or nearly empty (less than 50 characters of text content).");
     }
 
+    if (domChecks.hasRtlDir) {
+        failures.push("CRITICAL: The page or a major container is using dir='rtl'. This landing page must render in standard LTR mode. Please fix this in layout.tsx.");
+    }
+
     if (domChecks.brokenImages > 0) {
         failures.push(`WARNING: ${domChecks.brokenImages} of ${domChecks.imageCount} images failed to load (naturalWidth === 0).`);
     }
@@ -47,19 +52,35 @@ function validateDomChecks(domChecks: DomChecks): string[] {
  */
 async function callVisionLLM(
     screenshots: ScreenshotResult,
-    specContent: string
+    specContent: string,
+    designSystem?: DesignSystemRecommendation | null,
 ): Promise<{ score: number; criticalIssues: string[]; warnings: string[]; suggestions: string[] }> {
+    const styleContext = designSystem
+        ? `Selected design system:
+- Category: ${designSystem.category}
+- Style: ${designSystem.style.name}
+- Keywords: ${designSystem.style.keywords.join(", ")}
+- Effects: ${designSystem.style.effects.join(", ")}
+- Anti-patterns: ${designSystem.style.antiPatterns.join(", ")}
+- Typography: ${designSystem.typography.headingFont} / ${designSystem.typography.bodyFont}
+- Layout pattern: ${designSystem.layout.pattern}
+`
+        : "Selected design system: not available. Infer from spec only.";
+
     const systemPrompt = `You are a senior UI/UX QA reviewer for a premium landing page builder.
 Your job is to review screenshots of a generated landing page and evaluate its visual quality against the design spec.
 
 You must evaluate these specific criteria:
 1. LAYOUT: Is the layout modern? Are sections well-structured with generous spacing?
-2. VISUAL QUALITY: Does it use glassmorphism, gradients, shadows, and modern aesthetics? Is it Awwwards/Dribbble quality?
+2. VISUAL QUALITY: Does the page execute the chosen style consistently, instead of defaulting to generic glassmorphism? Is it Awwwards/Dribbble quality?
 3. TYPOGRAPHY: Are headlines large and bold? Is the text readable and well-sized?
 4. RESPONSIVENESS: Does the mobile viewport look intentional (not just squished desktop)?
 5. CONTENT COMPLETENESS: Are all spec sections present (Hero, About, Features, Testimonials, CTA, Footer)?
 6. IMAGES: Are images visible and well-styled (rounded corners, shadows)?
-7. OVERALL VIBE: Would this page impress a client paying $10,000 for a premium landing page?
+7. LTR READING FLOW: Does the page clearly read left-to-right, with primary copy blocks starting on the left on desktop? Flag layouts that feel mirrored or unintentionally RTL-like.
+8. STYLE CONSISTENCY: Do sections feel like one system, or are there mixed visual languages?
+9. ANTI-PATTERNS: Does the page violate any explicit anti-patterns from the design system?
+10. OVERALL VIBE: Would this page impress a client paying $10,000 for a premium landing page?
 
 Respond ONLY with valid JSON in this exact format:
 {
@@ -77,13 +98,13 @@ Rules for scoring:
 - 10: Perfect Awwwards-level execution
 
 criticalIssues = things that MUST be fixed (broken layout, missing sections, blank areas)
-warnings = things that SHOULD be fixed (poor spacing, weak typography, missing animations)
+warnings = things that SHOULD be fixed (poor spacing, weak typography, missing animations, mild style drift)
 suggestions = nice-to-have improvements (color tweaks, animation polish)`;
 
     const userContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
         {
             type: "text",
-            text: `Review these screenshots of a generated landing page against this spec:\n\n---SPEC START---\n${specContent.substring(0, 3000)}\n---SPEC END---\n\nScreenshot 1: Desktop viewport (1440x900)\nScreenshot 2: Mobile viewport (375x812)\nScreenshot 3: Full-page desktop scroll`,
+            text: `Review these screenshots of a generated landing page against this spec and design system.\n\n---DESIGN SYSTEM START---\n${styleContext}\n---DESIGN SYSTEM END---\n\n---SPEC START---\n${specContent.substring(0, 3000)}\n---SPEC END---\n\nBe explicit if the UI drifts into a different style family than requested.\nBe explicit if the page feels mirrored, right-anchored, or unintentionally RTL-like even when it is technically LTR.\nFor desktop split sections, primary copy should normally start on the left unless the spec clearly says otherwise.\n\nScreenshot 1: Desktop viewport (1440x900)\nScreenshot 2: Mobile viewport (375x812)\nScreenshot 3: Full-page desktop scroll`,
         },
         {
             type: "image_url",
@@ -157,7 +178,8 @@ suggestions = nice-to-have improvements (color tweaks, animation polish)`;
  */
 export async function runVisualReview(
     screenshots: ScreenshotResult,
-    specContent: string
+    specContent: string,
+    designSystem?: DesignSystemRecommendation | null,
 ): Promise<VisualQAResult> {
     console.log("   └─ 🎨 Running DOM checks...");
     const domCheckFailures = validateDomChecks(screenshots.domChecks);
@@ -177,7 +199,7 @@ export async function runVisualReview(
     }
 
     console.log("   └─ 🎨 Sending screenshots to Vision LLM for review...");
-    const visionResult = await callVisionLLM(screenshots, specContent);
+    const visionResult = await callVisionLLM(screenshots, specContent, designSystem);
     console.log(`   └─ 🎨 Vision LLM score: ${visionResult.score}/10`);
 
     // Merge DOM check failures into the result

@@ -5,7 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
-const dotenv_1 = __importDefault(require("dotenv"));
+require("dotenv/config");
 // ‼️ Fix for ts-node loading LangChain core modules which expect Web Streams to be globally available
 if (typeof global.ReadableStream === 'undefined') {
     global.ReadableStream = require('node:stream/web').ReadableStream;
@@ -15,9 +15,12 @@ const graph_1 = require("./orchestrator/graph");
 const editGraph_1 = require("./orchestrator/editGraph");
 const supabase_1 = require("./db/supabase");
 const emitter_1 = require("./orchestrator/emitter");
-dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 4000;
+console.log('========================================================================');
+console.log(`[BOOT] Server starting on PORT ${PORT}`);
+console.log(`[BOOT] Environment: ANTHROPIC_API_KEY is ${process.env.ANTHROPIC_API_KEY ? 'PRESENT' : 'MISSING'}`);
+console.log('========================================================================');
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
 const sandboxManager = new SandboxManager_1.SandboxManager();
@@ -195,6 +198,10 @@ app.get("/api/orchestrate/stream/:uuid", (req, res) => {
         delete clients[uuid];
     });
 });
-app.listen(PORT, () => {
+app.listen(PORT, (err) => {
+    if (err) {
+        console.error(`\n❌ [FATAL] Failed to bind to PORT ${PORT}. Is another instance already running?\n`, err.message);
+        process.exit(1);
+    }
     console.log(`🚀 Agent Orchestrator Backend running on http://localhost:${PORT}`);
 });

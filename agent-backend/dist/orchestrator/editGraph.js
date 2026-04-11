@@ -38,7 +38,7 @@ async function editDeveloperNode(state) {
     const errorContext = state.errorLogs
         ? `\n\nCRITICAL: Your previous edit caused errors that must be fixed:\n${state.errorLogs}\n`
         : "";
-    const editPrompt = `You are an elite Senior React/Vite Developer editing an existing premium Hebrew landing page.
+    const editPrompt = `You are an elite Senior Next.js App Router Developer editing an existing premium landing page.
 The user wants a specific change. You must apply ONLY the minimal edits needed — do NOT rewrite the entire codebase.
 
 CRITICAL WORKFLOW:
@@ -49,14 +49,15 @@ CRITICAL WORKFLOW:
 IMPORTANT: After reading files, you MUST produce <file> XML blocks with the fix. Do NOT just describe the problem — actually fix it by outputting the corrected file contents. Every response after reading should contain at least one <file> block.
 
 RULES:
-- The site is Hebrew, RTL (dir="rtl"). Maintain this in any new content.
+- The site follows a modern UX aesthetic. Maintain this in any new content.
 - All pre-installed libraries (framer-motion, lucide-react, clsx, tailwind-merge) are available — do NOT npm install them.
 - The navigation component is always "Navbar.tsx" — never "Navigation.tsx".
-- You CAN modify tailwind.config.js if the fix requires adding custom colors, fonts, or theme extensions. However, do NOT change next.config.ts or tsconfig.json unless QA errors require it.
+- You CAN modify tailwind.config.js if the fix requires adding custom colors, fonts, or theme extensions. However, do NOT change next.config.mjs or tsconfig.json unless QA errors require it.
 - If components use custom Tailwind classes (e.g. text-cream-200, bg-espresso-900) that are not defined in tailwind.config.js, you MUST either: (a) add them to tailwind.config.js, or (b) replace them with standard Tailwind classes.
 - Maintain the existing premium design quality (glassmorphism, animations, shadows, gradients).
 - If the user asks for a new section, integrate it naturally into the existing page flow in src/app/page.tsx.
 - This is a Next.js App Router project. Use Image from "next/image", Link from "next/link". Components with interactivity need "use client".
+- NEVER use <a> tags inside <Link>. Use modern Next.js <Link href="...">Text</Link> syntax.
 
 CURRENT FILE MANIFEST:
 ${fileList}
@@ -65,7 +66,7 @@ ${errorContext}
 USER'S EDIT REQUEST:
 "${state.userRequest}"`;
     // Scaffold lock — relaxed for edits: tailwind.config.js is allowed (users often need theme changes)
-    const protectedFiles = ["next.config.ts", "tsconfig.json", "postcss.config.mjs"];
+    const protectedFiles = ["next.config.mjs", "tsconfig.json", "postcss.config.js"];
     const isProtected = (filePath) => protectedFiles.some(pf => filePath.endsWith(pf));
     const shouldAllowProtectedWrite = () => {
         if (!state.errorLogs)
@@ -213,7 +214,7 @@ USER'S EDIT REQUEST:
 }
 /**
  * Node 2: Edit QA
- * Runs TypeScript + Vite build. Skips visual QA for faster iteration.
+ * Runs TypeScript + Next.js build. Skips visual QA for faster iteration.
  */
 async function editQaNode(state) {
     // Phase 1: TypeScript
@@ -227,7 +228,7 @@ async function editQaNode(state) {
             messages: [...state.messages, new messages_1.HumanMessage(`[Edit QA] TypeScript errors found:\n${tsResult}\n\nFix these errors with corrected <file> blocks.`)]
         };
     }
-    // Phase 2: Vite Build
+    // Phase 2: Next.js Build
     emitter_1.emitter.stepDone("edit_qa_ts", state.iterationCount);
     emitter_1.emitter.stepStart("edit_qa_build", state.iterationCount);
     const buildResult = await tools_2.tools.npmRun(state.sandboxPath, "build");
@@ -235,7 +236,7 @@ async function editQaNode(state) {
         emitter_1.emitter.stepFailed("edit_qa_build", "Build failed", state.iterationCount);
         return {
             status: "failed",
-            errorLogs: `Vite Build failed:\n${buildResult}`,
+            errorLogs: `Next.js Build failed:\n${buildResult}`,
             messages: [...state.messages, new messages_1.HumanMessage(`[Edit QA] Build failed:\n${buildResult}\n\nFix these errors with corrected <file> blocks.`)]
         };
     }

@@ -73,7 +73,8 @@ async function searchComponents(query) {
             }),
         });
         if (!res.ok) {
-            (0, logger_1.log)('MAGIC', 'search_error', { query, status: res.status, elapsedMs: Date.now() - startMs });
+            const errorBody = await res.text().catch(() => '');
+            (0, logger_1.log)('MAGIC', 'search_error', { query, status: res.status, body: errorBody.slice(0, 300), elapsedMs: Date.now() - startMs });
             return empty;
         }
         const data = await res.json();

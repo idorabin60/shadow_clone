@@ -112,24 +112,63 @@ function getComponentTier(componentName) {
 }
 // ─── Search query mapping ───────────────────────────────────────────────────
 const COMPONENT_SEARCH_MAP = {
-    'navbar': 'navbar dark premium landing page',
+    'navbar': 'navbar landing page navigation',
     'hero': 'hero section landing page with CTA',
-    'footer': 'footer dark with links',
-    'services': 'services grid cards pricing',
+    'footer': 'footer with links and contact',
+    'services': 'services section cards grid',
     'pricing': 'pricing table cards',
-    'testimonials': 'testimonials carousel cards',
-    'team': 'team members grid cards',
+    'testimonials': 'testimonials section social proof',
+    'team': 'team members section portraits',
     'about': 'about section with image',
-    'contact': 'contact form section',
-    'features': 'features grid icons',
-    'gallery': 'image gallery grid masonry',
+    'contact': 'contact section form',
+    'features': 'features section icon grid',
+    'gallery': 'gallery section editorial masonry',
     'faq': 'FAQ accordion section',
     'cta': 'call to action section button',
 };
-/** Get a search query for 21st.dev based on a component name. */
-function getSearchQuery(componentName) {
+function uniqTerms(values) {
+    const seen = new Set();
+    const result = [];
+    for (const value of values) {
+        const normalized = value.trim().toLowerCase();
+        if (!normalized || seen.has(normalized))
+            continue;
+        seen.add(normalized);
+        result.push(value.trim());
+    }
+    return result;
+}
+function sanitizeSearchTerms(terms, antiPatterns) {
+    const blocked = antiPatterns.map(pattern => pattern.toLowerCase());
+    return uniqTerms(terms).filter(term => {
+        const lower = term.toLowerCase();
+        return !blocked.some(pattern => pattern && lower.includes(pattern));
+    });
+}
+/** Get a style-aware search query for 21st.dev based on a component name and design system. */
+function getSearchQuery(componentName, designSystem) {
     const compLower = componentName.toLowerCase();
-    return COMPONENT_SEARCH_MAP[compLower]
+    const base = COMPONENT_SEARCH_MAP[compLower]
         ?? Object.entries(COMPONENT_SEARCH_MAP).find(([key]) => compLower.includes(key))?.[1]
         ?? `${componentName} section landing page`;
+    if (!designSystem)
+        return base;
+    const categoryTerms = designSystem.category
+        .split(/[\/,\s]+/)
+        .map(term => term.trim().toLowerCase())
+        .filter(term => term.length > 3)
+        .slice(0, 2);
+    const styleTerms = [
+        designSystem.style.name,
+        ...designSystem.style.keywords.slice(0, 3),
+        ...designSystem.style.effects.slice(0, 2),
+    ];
+    const toneTerms = [
+        ...categoryTerms,
+        designSystem.layout.pattern,
+        'premium',
+        'responsive',
+    ];
+    const terms = sanitizeSearchTerms([base, ...styleTerms, ...toneTerms], designSystem.style.antiPatterns);
+    return terms.join(' ');
 }

@@ -22,6 +22,7 @@ import { emitter } from './emitter';
 import { searchComponents } from './magicClient';
 import { tools } from '../tools';
 import { ComponentSpec, getSearchQuery } from './specParser';
+import type { DesignSystemRecommendation } from './designSystem';
 
 // ─── Models ─────────────────────────────────────────────────────────────────
 // Sonnet for distillation — cheap, fast, sufficient for summarization
@@ -98,6 +99,7 @@ const SCAFFOLD_PACKAGES = new Set([
 export async function distillInspiration(
     components: ComponentSpec[],
     sandboxPath: string,
+    designSystem?: DesignSystemRecommendation | null,
 ): Promise<InspirationBriefMap> {
     const startMs = Date.now();
     log('DISTILL', 'start', { components: components.length });
@@ -105,7 +107,7 @@ export async function distillInspiration(
 
     // ── Step 1: Search 21st.dev for all components in parallel ──────────
     const searchTasks = components.map(comp => {
-        const query = getSearchQuery(comp.componentName);
+        const query = getSearchQuery(comp.componentName, designSystem);
         return searchComponents(query);
     });
     const searchResults = await Promise.allSettled(searchTasks);

@@ -122,6 +122,14 @@ export interface DesignSystemRecommendation {
     };
 }
 
+export type DesignStyleFamily =
+    | 'glass'
+    | 'minimal'
+    | 'editorial'
+    | 'bold'
+    | 'soft'
+    | 'luxury';
+
 // ─── Default fallback (current hardcoded values) ────────────────────────────
 
 const DEFAULT_RECOMMENDATION: DesignSystemRecommendation = {
@@ -231,28 +239,165 @@ function transformRaw(raw: RawDesignSystem): DesignSystemRecommendation {
  * Replaces the verbose MANDATORY DESIGN STYLE block (~800 tokens → ~400 tokens).
  */
 export function generateDesignTokenBlock(ds: DesignSystemRecommendation): string {
+    const family = getDesignStyleFamily(ds);
+    const familyTokens = getStyleFamilyTokens(ds, family);
+
     return `═══ DESIGN TOKENS (use these exact classes — do NOT invent alternatives) ═══
+Style family: ${family}
 Section padding: py-24 px-6 md:px-12 max-w-7xl mx-auto
-Card: rounded-2xl bg-white/5 border border-white/10 backdrop-blur-xl p-8
-Card hover: hover:bg-white/10 hover:border-white/20 hover:shadow-lg transition-all duration-500
-Heading: text-4xl md:text-5xl font-bold text-[${ds.colors.text}]
-Hero heading: text-6xl md:text-8xl font-black
-Subheading: text-xl md:text-2xl text-[${ds.colors.text}]/70
-Body text: text-lg text-[${ds.colors.text}]/70 leading-relaxed
-Button primary: bg-[${ds.colors.accent}] hover:bg-[${ds.colors.accent}]/90 text-white px-8 py-4 rounded-xl font-bold transition-colors
-Button secondary: border border-[${ds.colors.accent}]/30 text-[${ds.colors.accent}] hover:bg-[${ds.colors.accent}]/10 px-8 py-4 rounded-xl transition-colors
-Background orb: absolute w-96 h-96 rounded-full blur-[128px] opacity-20 bg-[${ds.colors.primary}]
-Section bg: bg-gradient-to-b ${ds.colors.background}
-Primary gradient: from-[${ds.colors.primary}]/20 via-transparent to-[${ds.colors.accent}]/10
+Card: ${familyTokens.card}
+Card hover: ${familyTokens.cardHover}
+Section shell: ${familyTokens.sectionShell}
+Section bg: ${familyTokens.sectionBg}
+Background accent: ${familyTokens.backgroundAccent}
+Primary gradient: ${familyTokens.primaryGradient}
+Eyebrow: ${familyTokens.eyebrow}
+Heading: ${familyTokens.heading}
+Hero heading: ${familyTokens.heroHeading}
+Subheading: ${familyTokens.subheading}
+Body text: ${familyTokens.body}
+Button primary: ${familyTokens.primaryButton}
+Button secondary: ${familyTokens.secondaryButton}
+Divider / frame: ${familyTokens.frame}
 Heading font: '${ds.typography.headingFont}' | Body font: '${ds.typography.bodyFont}'
-Entrance animation: initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}
-Stagger children: transition={{ delay: index * 0.12 }}
+Entrance animation: ${familyTokens.entranceAnimation}
+Stagger children: ${familyTokens.stagger}
 Viewport trigger: viewport={{ once: true, margin: "-100px" }}
-Card hover motion: whileHover={{ y: -5, scale: 1.02 }} transition={{ type: "spring", stiffness: 300 }}
-Style: ${ds.style.name}
+Card hover motion: ${familyTokens.cardHoverMotion}
 Key effects: ${ds.style.cssTechnicalKeywords}
+Implementation cues: ${ds.style.aiPromptKeywords || ds.style.implementationChecklist}
 AVOID: ${ds.style.antiPatterns.join(', ')}
 ═══ END DESIGN TOKENS ═══`;
+}
+
+function includesAny(value: string, terms: string[]): boolean {
+    return terms.some(term => value.includes(term));
+}
+
+export function getDesignStyleFamily(ds: DesignSystemRecommendation): DesignStyleFamily {
+    const haystack = [
+        ds.style.name,
+        ds.style.keywords.join(' '),
+        ds.style.effects.join(' '),
+        ds.category,
+    ].join(' ').toLowerCase();
+
+    if (includesAny(haystack, ['glass', 'liquid glass', 'glassmorphism', 'frosted'])) return 'glass';
+    if (includesAny(haystack, ['luxury', 'premium', 'elegant', 'gold'])) return 'luxury';
+    if (includesAny(haystack, ['editorial', 'magazine', 'storytelling'])) return 'editorial';
+    if (includesAny(haystack, ['bold', 'brutal', 'block', 'vibrant'])) return 'bold';
+    if (includesAny(haystack, ['soft', 'wellness', 'calm', 'neumorphism', 'pastel'])) return 'soft';
+    return 'minimal';
+}
+
+function getStyleFamilyTokens(ds: DesignSystemRecommendation, family: DesignStyleFamily) {
+    const shared = {
+        primaryButton: `bg-[${ds.colors.accent}] hover:bg-[${ds.colors.accent}]/90 text-white px-8 py-4 rounded-xl font-bold transition-all duration-300`,
+        secondaryButton: `border text-[${ds.colors.text}] border-[${ds.colors.text}]/20 hover:border-[${ds.colors.accent}]/40 hover:text-[${ds.colors.accent}] px-8 py-4 rounded-xl transition-all duration-300`,
+        entranceAnimation: `initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}`,
+        stagger: `transition={{ delay: index * 0.12 }}`,
+        cardHoverMotion: `whileHover={{ y: -5, scale: 1.02 }} transition={{ type: "spring", stiffness: 300 }}`,
+    };
+
+    switch (family) {
+        case 'glass':
+            return {
+                ...shared,
+                card: `rounded-3xl bg-white/8 border border-white/14 backdrop-blur-2xl shadow-[0_18px_60px_rgba(0,0,0,0.28)] p-8`,
+                cardHover: `hover:bg-white/12 hover:border-white/20 hover:shadow-[0_24px_80px_rgba(0,0,0,0.32)] transition-all duration-500`,
+                sectionShell: `relative overflow-hidden`,
+                sectionBg: `bg-gradient-to-b ${ds.colors.background}`,
+                backgroundAccent: `absolute w-96 h-96 rounded-full blur-[128px] opacity-20 bg-[${ds.colors.primary}]`,
+                primaryGradient: `from-[${ds.colors.primary}]/25 via-white/5 to-[${ds.colors.accent}]/15`,
+                eyebrow: `inline-flex items-center rounded-full border border-white/15 bg-white/8 px-4 py-1 text-xs uppercase tracking-[0.3em] text-[${ds.colors.text}]/70`,
+                heading: `text-4xl md:text-5xl font-bold text-[${ds.colors.text}] tracking-tight`,
+                heroHeading: `text-6xl md:text-8xl font-black text-[${ds.colors.text}] tracking-tight`,
+                subheading: `text-xl md:text-2xl text-[${ds.colors.text}]/72 leading-relaxed`,
+                body: `text-lg text-[${ds.colors.text}]/70 leading-relaxed`,
+                frame: `border border-white/10`,
+            };
+        case 'luxury':
+            return {
+                ...shared,
+                card: `rounded-[28px] border border-[${ds.colors.accent}]/25 bg-black/30 p-8 shadow-[0_22px_80px_rgba(0,0,0,0.34)]`,
+                cardHover: `hover:-translate-y-1 hover:border-[${ds.colors.accent}]/45 hover:shadow-[0_30px_90px_rgba(0,0,0,0.42)] transition-all duration-500`,
+                sectionShell: `relative overflow-hidden`,
+                sectionBg: `bg-gradient-to-b ${ds.colors.background}`,
+                backgroundAccent: `absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[${ds.colors.accent}] to-transparent opacity-70`,
+                primaryGradient: `from-[${ds.colors.accent}]/20 via-transparent to-[${ds.colors.primary}]/12`,
+                eyebrow: `inline-flex items-center rounded-full border border-[${ds.colors.accent}]/30 px-4 py-1 text-xs uppercase tracking-[0.35em] text-[${ds.colors.accent}]`,
+                heading: `text-4xl md:text-5xl font-semibold text-[${ds.colors.text}] tracking-[-0.03em]`,
+                heroHeading: `text-6xl md:text-8xl font-semibold text-[${ds.colors.text}] tracking-[-0.05em]`,
+                subheading: `text-xl md:text-2xl text-[${ds.colors.text}]/78 leading-relaxed`,
+                body: `text-lg text-[${ds.colors.text}]/74 leading-8`,
+                frame: `border border-[${ds.colors.accent}]/20`,
+            };
+        case 'editorial':
+            return {
+                ...shared,
+                card: `rounded-[24px] border border-black/10 bg-white/90 p-8 shadow-[0_24px_70px_rgba(15,23,42,0.08)]`,
+                cardHover: `hover:-translate-y-1 hover:shadow-[0_32px_90px_rgba(15,23,42,0.12)] transition-all duration-500`,
+                sectionShell: `relative overflow-hidden`,
+                sectionBg: `bg-gradient-to-b ${ds.colors.background}`,
+                backgroundAccent: `absolute inset-y-0 left-0 w-px bg-[${ds.colors.accent}]/30`,
+                primaryGradient: `from-[${ds.colors.primary}]/10 via-transparent to-[${ds.colors.accent}]/8`,
+                eyebrow: `inline-flex items-center border-b border-[${ds.colors.accent}]/40 pb-2 text-xs uppercase tracking-[0.4em] text-[${ds.colors.text}]/70`,
+                heading: `text-4xl md:text-5xl font-semibold text-[${ds.colors.text}] tracking-[-0.04em]`,
+                heroHeading: `text-6xl md:text-8xl font-semibold text-[${ds.colors.text}] leading-[0.95] tracking-[-0.06em]`,
+                subheading: `max-w-3xl text-xl md:text-2xl text-[${ds.colors.text}]/75 leading-relaxed`,
+                body: `text-lg text-[${ds.colors.text}]/72 leading-8`,
+                frame: `border border-black/10`,
+            };
+        case 'bold':
+            return {
+                ...shared,
+                card: `rounded-[26px] border-2 border-[${ds.colors.text}] bg-[${ds.colors.primary}]/10 p-8 shadow-[10px_10px_0_rgba(15,23,42,0.85)]`,
+                cardHover: `hover:-translate-y-2 hover:translate-x-1 hover:shadow-[16px_16px_0_rgba(15,23,42,0.9)] transition-all duration-300`,
+                sectionShell: `relative overflow-hidden`,
+                sectionBg: `bg-gradient-to-b ${ds.colors.background}`,
+                backgroundAccent: `absolute -top-16 right-0 h-40 w-40 rounded-full bg-[${ds.colors.accent}]/25 blur-3xl`,
+                primaryGradient: `from-[${ds.colors.primary}]/30 via-[${ds.colors.accent}]/10 to-transparent`,
+                eyebrow: `inline-flex items-center rounded-full border-2 border-[${ds.colors.text}] bg-[${ds.colors.accent}] px-4 py-1 text-xs font-bold uppercase tracking-[0.3em] text-white`,
+                heading: `text-4xl md:text-5xl font-black uppercase text-[${ds.colors.text}] tracking-[-0.03em]`,
+                heroHeading: `text-6xl md:text-8xl font-black uppercase text-[${ds.colors.text}] leading-[0.92] tracking-[-0.05em]`,
+                subheading: `text-xl md:text-2xl font-medium text-[${ds.colors.text}]/80 leading-relaxed`,
+                body: `text-lg text-[${ds.colors.text}]/75 leading-relaxed`,
+                frame: `border-2 border-[${ds.colors.text}]`,
+            };
+        case 'soft':
+            return {
+                ...shared,
+                card: `rounded-[30px] border border-white/60 bg-white/75 p-8 shadow-[0_20px_60px_rgba(148,163,184,0.18)]`,
+                cardHover: `hover:-translate-y-1 hover:shadow-[0_26px_72px_rgba(148,163,184,0.22)] transition-all duration-500`,
+                sectionShell: `relative overflow-hidden`,
+                sectionBg: `bg-gradient-to-b ${ds.colors.background}`,
+                backgroundAccent: `absolute -left-12 top-12 h-48 w-48 rounded-full bg-[${ds.colors.primary}]/12 blur-3xl`,
+                primaryGradient: `from-[${ds.colors.primary}]/14 via-white/30 to-[${ds.colors.accent}]/12`,
+                eyebrow: `inline-flex items-center rounded-full bg-white/80 px-4 py-1 text-xs uppercase tracking-[0.28em] text-[${ds.colors.text}]/65 shadow-sm`,
+                heading: `text-4xl md:text-5xl font-semibold text-[${ds.colors.text}] tracking-[-0.03em]`,
+                heroHeading: `text-6xl md:text-8xl font-semibold text-[${ds.colors.text}] tracking-[-0.05em]`,
+                subheading: `text-xl md:text-2xl text-[${ds.colors.text}]/74 leading-relaxed`,
+                body: `text-lg text-[${ds.colors.text}]/70 leading-8`,
+                frame: `border border-white/70`,
+            };
+        case 'minimal':
+        default:
+            return {
+                ...shared,
+                card: `rounded-[24px] border border-black/8 bg-white p-8 shadow-[0_20px_50px_rgba(15,23,42,0.06)]`,
+                cardHover: `hover:-translate-y-1 hover:border-black/12 hover:shadow-[0_24px_60px_rgba(15,23,42,0.09)] transition-all duration-300`,
+                sectionShell: `relative`,
+                sectionBg: `bg-gradient-to-b ${ds.colors.background}`,
+                backgroundAccent: `absolute inset-x-0 top-0 h-px bg-[${ds.colors.primary}]/20`,
+                primaryGradient: `from-[${ds.colors.primary}]/12 via-transparent to-[${ds.colors.accent}]/8`,
+                eyebrow: `inline-flex items-center rounded-full border border-black/10 px-4 py-1 text-xs uppercase tracking-[0.32em] text-[${ds.colors.text}]/60`,
+                heading: `text-4xl md:text-5xl font-semibold text-[${ds.colors.text}] tracking-[-0.04em]`,
+                heroHeading: `text-6xl md:text-8xl font-semibold text-[${ds.colors.text}] tracking-[-0.06em]`,
+                subheading: `text-xl md:text-2xl text-[${ds.colors.text}]/72 leading-relaxed`,
+                body: `text-lg text-[${ds.colors.text}]/70 leading-relaxed`,
+                frame: `border border-black/8`,
+            };
+    }
 }
 
 // ─── Main entry point ───────────────────────────────────────────────────────

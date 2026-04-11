@@ -33,7 +33,6 @@ const openaiModel = new openai_1.ChatOpenAI({
     modelName: "gpt-4o",
     temperature: 0
 });
-// We prefer Claude 3.5 Sonnet for the Developer and Architect nodes as it is currently 
 // the industry gold standard for autonomous React/Vite coding and complex tool patching.
 const claudePmModel = process.env.ANTHROPIC_API_KEY
     ? new anthropic_1.ChatAnthropic({
@@ -57,7 +56,7 @@ const devModel = claudeDevModel;
 // ─── Per-node timeouts (ms) — prevents any single LLM call from hanging ─────
 const TIMEOUTS = {
     pm: 180_000, // 180s — PM writes spec
-    devLoopStep: 180_000, // 180s — each step in the developer agent loop (Opus needs time for large rewrites)
+    devLoopStep: 300_000, // 300s — each step in the developer agent loop (Opus needs time for large rewrites)
     qa_ts: 30_000, // 30s — tsc check
     qa_build: 120_000, // 120s — next build (longer than vite)
     qa_visual: 180_000, // 3 min — screenshots + vision LLM
@@ -76,7 +75,12 @@ const DevMemorySchema = zod_1.z.object({
 async function productManagerNode(state) {
     const sandboxId = state.sandboxPath.split('/').pop() ?? state.sandboxPath;
     const pmStart = Date.now();
+    const costTracker = state.costTracker ?? new logger_1.CostTracker();
     (0, logger_1.log)('PM', 'start', { sandboxId, businessName: state.businessInput?.businessName });
+    (0, logger_1.log)('PM', 'model_check', {
+        hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
+        usingModel: process.env.ANTHROPIC_API_KEY ? "claude-sonnet-4-6" : "gpt-4o (fallback)"
+    });
     emitter_1.emitter.stepStart("pm");
     // Generate data-driven design system recommendation based on business type.
     // The design system CSV databases are in English, so we first extract English keywords
@@ -86,8 +90,8 @@ async function productManagerNode(state) {
         : JSON.stringify(state.businessInput);
     let designQuery = 'business website';
     try {
-        const classifyResponse = await openaiModel.invoke([
-            new messages_1.SystemMessage('Extract 2-5 English keywords describing this business type and tone. Output ONLY the keywords separated by spaces. Example: "luxury restaurant fine dining". No other text.'),
+        const classifyResponse = await pmModel.invoke([
+            new messages_1.SystemMessage('Extract 5-8 English keywords describing the business type, tone, and specific UI/visual requests (e.g., "dark theme", "glassmorphism", "bento grid", "luxury"). Output ONLY the keywords separated by spaces. No other text.'),
             new messages_1.HumanMessage(rawInput),
         ]);
         const keywords = classifyResponse.content.trim();
@@ -100,9 +104,8 @@ async function productManagerNode(state) {
         (0, logger_1.log)('PM', 'design_query_fallback', { error: e.message });
     }
     const designSystem = await (0, designSystem_1.generateDesignSystem)(designQuery);
-    // Store on state for downstream nodes (parallel writer, dev prompt)
-    state.__designSystem = designSystem;
-    const systemPrompt = `You are a world-class UI/UX Designer and Brand Strategist for a premium Hebrew landing page builder.
+    // Design system is now a proper typed field on OrchestrationState
+    const systemPrompt = `You are a world-class UI/UX Designer and Brand Strategist for a premium landing page builder.
 Your job is to analyse the client's business and produce a precise, structured spec.md that leaves zero ambiguity for the developer.
 The design MUST be Awwwards/Dribbble quality. Vague or generic specs are unacceptable.
 
@@ -115,7 +118,7 @@ DESIGN SYSTEM RECOMMENDATION (generated from analysis of "${designQuery}"):
 - Recommended Colors: Primary ${designSystem.colors.primary}, Secondary ${designSystem.colors.secondary}, Accent ${designSystem.colors.accent}, Background ${designSystem.colors.background}, Text ${designSystem.colors.text}
 - Color Notes: ${designSystem.colors.notes}
 - Heading Font: ${designSystem.typography.headingFont}
-- Body Font: ${designSystem.typography.bodyFont} (Hebrew-compatible)
+- Body Font: ${designSystem.typography.bodyFont}
 - Recommended Sections: ${designSystem.layout.sections.join(' > ')}
 - Layout Pattern: ${designSystem.layout.pattern}
 - CTA Placement: ${designSystem.layout.ctaPlacement}
@@ -127,8 +130,12 @@ You MUST output spec.md using EXACTLY this structure (fill every section based o
 ## Business Analysis
 - Type: ${designSystem.category}
 - Tone: [Professional / Playful / Luxurious / Trustworthy / Bold / Minimalist — pick based on business]
-- Primary CTA: [exact Hebrew button text, e.g. "קבע פגישה עכשיו"]
-- Value Proposition: [one sentence in Hebrew describing the core offer]
+- Primary CTA: [exact button text, e.g. "Get Started Now"]
+- Value Proposition: [one sentence describing the core offer]
+
+## Visual & Layout Directives
+- User's Requested UI Style/Theme: [explicit definition from input]
+- Specific Layout Requests: [explicit constraints from input, e.g. Bento grid]
 
 ## Color Palette
 Use the recommended colors as your starting point. Fine-tune if needed for this specific brand.
@@ -141,7 +148,7 @@ Use the recommended colors as your starting point. Fine-tune if needed for this 
 
 ## Typography
 - Heading Font: ${designSystem.typography.headingFont}
-- Body Font: ${designSystem.typography.bodyFont} (Hebrew-compatible)
+- Body Font: ${designSystem.typography.bodyFont}
 - CSS Import: ${designSystem.typography.cssImport}
 - Font Weights: 300 (body light), 400 (body), 700 (bold), 900 (hero headline)
 - Hero Headline: text-6xl md:text-8xl font-black leading-tight tracking-tight
@@ -155,11 +162,11 @@ Use the recommended colors as your starting point. Fine-tune if needed for this 
 
 ## Sections (ordered — business-specific, not generic)
 Use the recommended sections (${designSystem.layout.sections.join(', ')}) as a starting point, but adapt for this specific business:
-1. Navbar — logo (business name in Hebrew) + Hebrew nav links
-2. Hero — [Hebrew headline], [Hebrew subline], CTA button: "[exact Hebrew CTA text]"
-3. [Section name] — [brief content description with Hebrew placeholder copy]
+1. Navbar — logo (business name) + nav links
+2. Hero — [headline], [subline], CTA button: "[exact CTA text]"
+3. [Section name] — [brief content description with placeholder copy]
 ... (add as many as this business needs)
-N. Footer — Hebrew links, copyright, social icons
+N. Footer — links, copyright, social icons
 
 ## Component List
 List every section component .tsx file the developer must create (one per line):
@@ -174,7 +181,7 @@ List every section component .tsx file the developer must create (one per line):
 - Effects: ${designSystem.style.effects.join(', ')}
 - Animations: framer-motion on sections (use effects appropriate to the "${designSystem.style.name}" style — NOT always fade-up)
 - Icons: lucide-react only
-- RTL: dir="rtl" on root element, text-right throughout, flex-row-reverse where needed
+- RTL: do not use RTL. Use standard LTR layout.
 - Images: never empty divs; always Unsplash URLs relevant to this business
 - AVOID: ${designSystem.style.antiPatterns.join(', ')}
 
@@ -196,11 +203,11 @@ Output ONLY the spec.md content wrapped in a markdown code block. No other text.
         return {
             status: "failed",
             errorLogs: `Product Manager step failed: ${err.message}`,
-            messages: state.messages
+            messages: state.messages,
+            costTracker,
         };
     }
     // Cost tracking
-    const costTracker = new logger_1.CostTracker();
     const pmUsage = response?.usage_metadata;
     costTracker.record('PM', 'claude-sonnet-4-6', pmUsage);
     // Extract text inside ```md or just use raw text
@@ -211,12 +218,28 @@ Output ONLY the spec.md content wrapped in a markdown code block. No other text.
         specContent = mdMatch[1];
         (0, logger_1.log)('PM', 'extracted_from_fence', { chars: specContent.length });
     }
+    // Fallback: If the LLM generated multiple blocks or put the component list outside the first fence,
+    // revert to the raw output to guarantee we don't blind the Developer node.
+    if (!specContent.includes('## Component List') && response.content.includes('## Component List')) {
+        specContent = response.content;
+        (0, logger_1.log)('PM', 'extraction_fallback_to_raw', { chars: specContent.length });
+    }
     if (specContent.length < 500) {
         (0, logger_1.log)('PM', 'spec_too_short', { chars: specContent.length, preview: specContent.slice(0, 200) });
     }
     // Use the write tool to save it
     await tools_1.tools.writeFile(state.sandboxPath, "spec.md", specContent);
     (0, logger_1.log)('PM', 'spec_written', { chars: specContent.length });
+    // Sync custom colors and directives from spec.md back to the designSystem state
+    const colorBg = specContent.match(/- Background:\s*([^\n]+)/);
+    if (colorBg)
+        designSystem.colors.background = colorBg[1].trim();
+    const colorText = specContent.match(/- Text Primary:\s*([^\n]+)/);
+    if (colorText)
+        designSystem.colors.text = colorText[1].trim();
+    const colorAccent = specContent.match(/- Accent.*:\s*([^\n]+)/);
+    if (colorAccent)
+        designSystem.colors.accent = colorAccent[1].replace(/\(.*\)/g, '').trim();
     // Save design system recommendation for downstream nodes (parallel writer, dev prompt)
     await tools_1.tools.writeFile(state.sandboxPath, "design_system.json", JSON.stringify(designSystem, null, 2));
     (0, logger_1.log)('PM', 'design_system_saved', { style: designSystem.style.name, category: designSystem.category });
@@ -255,7 +278,8 @@ Output ONLY the spec.md content wrapped in a markdown code block. No other text.
         naming_rules: [
             "Navigation MUST be named Navbar.tsx. Never Navigation.tsx",
             "Do not overwrite tailwind.config.js unless requested",
-            "Avoid rewriting index.html"
+            "Avoid rewriting index.html",
+            "Never use <a> tags inside <Link>. Use modern Next.js <Link href=\"...\">Text</Link> syntax."
         ],
         entry_file_imports: ["import App from './App.tsx'"]
     };
@@ -275,7 +299,9 @@ Output ONLY the spec.md content wrapped in a markdown code block. No other text.
     emitter_1.emitter.stepDone("pm");
     return {
         status: "coding",
-        messages: state.messages
+        messages: state.messages,
+        designSystem,
+        costTracker,
     };
 }
 /**
@@ -285,6 +311,7 @@ Output ONLY the spec.md content wrapped in a markdown code block. No other text.
 async function developerNode(state) {
     const sandboxId = state.sandboxPath.split('/').pop() ?? state.sandboxPath;
     const devStart = Date.now();
+    const costTracker = state.costTracker ?? new logger_1.CostTracker();
     (0, logger_1.log)('DEV', 'start', { sandboxId, iteration: state.iterationCount, hasErrors: !!state.errorLogs });
     emitter_1.emitter.stepStart("developer", state.iterationCount);
     const spec = await tools_1.tools.readFile(state.sandboxPath, "spec.md");
@@ -350,24 +377,18 @@ Use this to understand what has already been built and what remains. You will up
         }
         catch { /* non-blocking */ }
     }
-    // Read design system for dynamic dev prompt rules
-    let devDesignSystem = null;
-    try {
-        const dsRaw = await tools_1.tools.readFile(state.sandboxPath, "design_system.json");
-        if (!dsRaw.startsWith("Error"))
-            devDesignSystem = JSON.parse(dsRaw);
-    }
-    catch { /* use fallback rules */ }
+    // Use design system from typed state (set by PM node)
+    const devDesignSystem = state.designSystem;
     const dsRules = devDesignSystem
         ? (0, designSystem_1.generateDesignTokenBlock)(devDesignSystem)
         : `FONT SETUP (in src/globals.css):
 @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;700;900&display=swap');
-Body font: 'Heebo', sans-serif; direction: rtl;`;
+Body font: 'Inter', sans-serif;`;
     const devPrompt = `You are an elite Senior Next.js Developer at a top-tier design agency.
-You are building an ultra-premium Hebrew landing page using Next.js App Router. The spec.md below defines EVERYTHING: colors, fonts, sections, image themes, and Hebrew copy. Follow it precisely.
+You are building an ultra-premium landing page using Next.js App Router. The spec.md below defines EVERYTHING: colors, fonts, sections, image themes, and copy. Follow it precisely.
 
 PROJECT STRUCTURE (Next.js App Router):
-- src/app/layout.tsx — root layout with HTML lang="he" dir="rtl"
+- src/app/layout.tsx — root layout with HTML lang="en"
 - src/app/page.tsx — main page that imports and renders all section components
 - src/components/sections/ — individual section components (Hero.tsx, Services.tsx, etc.)
 - src/components/ui/ — shadcn/ui components (pre-installed)
@@ -406,21 +427,30 @@ MANDATORY DESIGN & IMPLEMENTATION RULES:
    URL format: https://images.unsplash.com/photo-XXXXXX?auto=format&fit=crop&w=1200&q=80
    Choose photos relevant to the business — read the spec.md Image Strategy section for the correct themes.
    Hero backgrounds: use w=1600. Card images: use w=800.
-6. RTL: dir="rtl" on the root <div> in App.tsx. text-right on all text. flex-row-reverse on horizontal layouts.
+6. Layout: Build a highly structured Left-To-Right (LTR) application layout. Use clean standard grids and flexbox.
+   - On desktop split sections, primary copy belongs on the left and supporting product/dashboard visuals belong on the right unless spec.md explicitly says otherwise.
+   - Default to text-left, items-start, and justify-start for headings, body copy, CTA rows, metrics, legends, and labels.
+   - A centered section intro is allowed only when spec.md clearly implies it; the internal reading flow must still remain LTR.
+   - Never produce a layout that feels mirrored or RTL-like without an explicit instruction.
 7. Component naming: navigation MUST be Navbar.tsx. Never Navigation.tsx.
 8. Build EVERY component listed in spec.md Component List — do not skip any section.
-9. Hebrew copy: use the actual Hebrew content from spec.md, not generic placeholders.
+9. Copywriting: use the actual English content from spec.md, not generic placeholders.
 
 CRITICAL WORKFLOW (PATCH -> VERIFY):
 1. READ spec.md carefully — it defines sections, colors, fonts, and image themes for THIS specific business.
 2. PATCH: output ALL files as raw XML <file> blocks in your text response. Do NOT use write_file or apply_patchset tools.
    <file path="src/components/sections/Hero.tsx">
    "use client";
-   export default function Hero() { return <section dir="rtl" />; }
+   export default function Hero() { return <section className="relative w-full overflow-hidden" />; }
    </file>
 3. VERIFY: your XML is auto-extracted and tsc --noEmit is run. Fix any errors in the next step.
 
 Your task: Fix any TypeScript errors or QA issues in the generated components. Output only the files that need changes.
+
+Here are the exact business requirements requested by the client:
+=========================================
+${typeof state.businessInput === 'string' ? state.businessInput : JSON.stringify(state.businessInput, null, 2)}
+=========================================
 
 Here is the exact spec.md written by the UX Architect:
 =========================================
@@ -451,7 +481,7 @@ ${errorContext}`;
             additional_kwargs: { __anchor: true }
         }));
     }
-    let maxSteps = 100;
+    let maxSteps = 15; // Realistic cap: a few tool-read steps + 2 patch attempts + TS checks
     let steps = 0;
     const writtenFiles = []; // track for memory update context
     let lastTsError = null; // track for Task 3.3 exit state passthrough
@@ -462,19 +492,13 @@ ${errorContext}`;
     if (state.iterationCount === 0 && !state.errorLogs) {
         emitter_1.emitter.info("developer", "Starting tiered component generation...");
         (0, logger_1.log)('DEV', 'parallel_first_pass_start', {});
-        // Read design system saved by PM node
-        let dsForParallel = null;
-        try {
-            const dsRaw = await tools_1.tools.readFile(state.sandboxPath, "design_system.json");
-            if (!dsRaw.startsWith("Error"))
-                dsForParallel = JSON.parse(dsRaw);
-        }
-        catch { /* fallback to null — parallel writer uses defaults */ }
+        // Use design system from typed state (set by PM node)
+        const dsForParallel = state.designSystem;
         // Distill 21st.dev inspiration briefs before writing any components
         const specComponents = (0, specParser_1.parseSpecComponents)(spec);
         let briefs = {};
         try {
-            briefs = await (0, inspirationDistiller_1.distillInspiration)(specComponents, state.sandboxPath);
+            briefs = await (0, inspirationDistiller_1.distillInspiration)(specComponents, state.sandboxPath, dsForParallel);
             (0, logger_1.log)('DEV', 'inspiration_briefs_ready', { count: Object.keys(briefs).length });
         }
         catch (e) {
@@ -522,7 +546,12 @@ ${errorContext}`;
     // ── PHASE B: Sequential fix loop ────────────────────────────────────
     // Runs when: (a) parallel pass had TS errors, or (b) this is a fix iteration from QA
     const invokeWithBackoff = async (model, msgs) => {
-        const payload = [new messages_1.SystemMessage(prompt), ...msgs];
+        let payloadMsgs = [...msgs];
+        // Anthropic API guard: prevent "assistant message prefill" crashes
+        if (payloadMsgs.length > 0 && payloadMsgs[payloadMsgs.length - 1]._getType() !== 'human') {
+            payloadMsgs.push(new messages_1.HumanMessage("Please review the system prompt and provide the necessary <file> block updates to fix the QA errors."));
+        }
+        const payload = [new messages_1.SystemMessage(prompt), ...payloadMsgs];
         // Native LangChain fallbacks automatically handle 429 and 500 errors by routing to GPT-4o
         return await (0, logger_1.withTimeout)(model.invoke(payload), TIMEOUTS.devLoopStep, 'DEV');
     };
@@ -537,6 +566,7 @@ ${errorContext}`;
         let response;
         try {
             response = await invokeWithBackoff(modelWithTools, currentMessages);
+            costTracker.record('DEV', 'claude-opus-4-6', response?.usage_metadata);
         }
         catch (e) {
             // TimeoutError or LLM failure — exit the loop gracefully instead of crashing
@@ -549,7 +579,7 @@ ${errorContext}`;
         let xmlErrorMessages = [];
         if (response.content && typeof response.content === "string" && response.content.trim().length > 0) {
             // XML Artifact Extraction — guards and stripping handled in xmlParser.ts
-            const parseResult = (0, xmlParser_1.parseXmlFiles)(response.content, state.errorLogs);
+            const parseResult = (0, xmlParser_1.parseXmlFiles)(response.content, state.errorLogs, state.iterationCount);
             for (const { path: filePath, content: fileContent } of parseResult.files) {
                 emitter_1.emitter.fileActivity("developer", filePath, "created");
                 fileCache.delete(filePath);
@@ -662,23 +692,21 @@ ${errorContext}`;
         : exitReason === 'timeout'
             ? `Developer loop timed out after ${steps} steps — QA will re-run TypeScript to assess state.`
             : null; // 'done' and 'ts_passed' → clean exit, let QA start fresh
+    const devTotal = costTracker.total();
     (0, logger_1.log)('DEV', 'done', {
         iteration: state.iterationCount,
         exitReason,
         steps,
         elapsedMs: Date.now() - devStart,
         outgoingErrorLogs: !!outgoingErrorLogs,
+        totalCostUSD: Number(devTotal.estimatedCostUSD.toFixed(4)),
     });
     // Update dev_memory.json with session state for the next iteration.
-    // Uses GPT-4o (cheap) — not the Opus dev model. Non-blocking on failure.
-    // Task 2.3: Use structured output (JSON mode) — no XML regex, no silent failures.
-    // Pass explicit session context (files written + errors) instead of last 5 messages.
+    // Uses GPT-4o structured output for new decisions/issues, then merges with
+    // the previous memory to guarantee completed components are never lost.
     (0, logger_1.log)('MEMORY', 'update_start', { filesWritten: writtenFiles.length });
     try {
-        const memUpdatePrompt = `Update the dev_memory.json based on this development session.
-
-Current memory:
-${JSON.stringify(devMemory, null, 2)}
+        const memUpdatePrompt = `Based on this development session, provide ONLY NEW information to merge into dev_memory.json.
 
 Files written this session: ${writtenFiles.length > 0 ? writtenFiles.join(', ') : 'none'}
 TypeScript/build errors fixed: ${exitReason === 'ts_passed' ? 'yes' : 'no'}
@@ -686,18 +714,35 @@ Session exit reason: ${exitReason}
 QA errors from previous iteration: ${state.errorLogs ? state.errorLogs.substring(0, 300) : 'none'}
 
 Rules:
-- Move all files from "Files written this session" into components_completed if they are complete
-- Add key design decisions (colors, fonts, layout patterns) to design_decisions
-- Clear known_issues if exitReason is ts_passed, otherwise list remaining issues
-- Set next_steps to what the QA pipeline will likely require next
-- Keep intent unchanged`;
+- components_completed: list ONLY the new files written this session (they will be merged with existing)
+- design_decisions: list ONLY new decisions made this session
+- known_issues: list current issues (these REPLACE previous — empty array if ts_passed)
+- next_steps: list what QA will likely require next (these REPLACE previous)
+- intent: keep the same as: "${devMemory.intent}"`;
         const memModel = openaiModel.withStructuredOutput(DevMemorySchema);
-        const updatedMem = await memModel.invoke([new messages_1.SystemMessage(memUpdatePrompt)]);
-        await tools_1.tools.writeFile(state.sandboxPath, "dev_memory.json", JSON.stringify(updatedMem, null, 2));
+        const llmUpdate = await memModel.invoke([new messages_1.SystemMessage(memUpdatePrompt)]);
+        // Merge: union previous + new for cumulative fields, replace for current-state fields
+        const prevCompleted = new Set(devMemory.components_completed);
+        for (const c of llmUpdate.components_completed)
+            prevCompleted.add(c);
+        // Also add files we know were written (ground truth, not LLM-dependent)
+        for (const f of writtenFiles)
+            prevCompleted.add(f);
+        const prevDecisions = new Set(devMemory.design_decisions);
+        for (const d of llmUpdate.design_decisions)
+            prevDecisions.add(d);
+        const mergedMemory = {
+            intent: devMemory.intent, // never change — ground truth from user
+            components_completed: [...prevCompleted],
+            design_decisions: [...prevDecisions],
+            known_issues: llmUpdate.known_issues, // replace — reflects current state
+            next_steps: llmUpdate.next_steps, // replace — reflects current state
+        };
+        await tools_1.tools.writeFile(state.sandboxPath, "dev_memory.json", JSON.stringify(mergedMemory, null, 2));
         (0, logger_1.log)('MEMORY', 'update_done', {
-            completedComponents: updatedMem.components_completed.length,
-            nextSteps: updatedMem.next_steps.length,
-            knownIssues: updatedMem.known_issues.length,
+            completedComponents: mergedMemory.components_completed.length,
+            nextSteps: mergedMemory.next_steps.length,
+            knownIssues: mergedMemory.known_issues.length,
         });
         emitter_1.emitter.info("developer", "Session memory updated");
     }
@@ -714,6 +759,7 @@ Rules:
         status: "qa",
         iterationCount: state.iterationCount + 1,
         messages: outgoingMessages,
+        costTracker,
         // Task 3.3: pass error context forward on unclean exits so QA has full picture
         ...(outgoingErrorLogs !== null ? { errorLogs: outgoingErrorLogs } : {}),
     };
@@ -725,6 +771,7 @@ Rules:
 async function qaNode(state) {
     const sandboxId = state.sandboxPath.split('/').pop() ?? state.sandboxPath;
     const qaStart = Date.now();
+    const costTracker = state.costTracker ?? new logger_1.CostTracker();
     (0, logger_1.log)('QA_TS', 'start', { sandboxId, iteration: state.iterationCount });
     try {
         // --- Phase 1: TypeScript compilation ---
@@ -740,6 +787,7 @@ async function qaNode(state) {
                 status: "failed",
                 errorLogs: `TypeScript TypeCheck failed:\n${tsResult}`,
                 messages: state.messages,
+                costTracker,
             };
         }
         // --- Phase 2: Next.js Build ---
@@ -755,6 +803,7 @@ async function qaNode(state) {
                 status: "failed",
                 errorLogs: `Next.js Build failed:\n${buildResult}`,
                 messages: state.messages,
+                costTracker,
             };
         }
         // --- Phase 3: Visual QA (Screenshots + Vision LLM) ---
@@ -764,7 +813,7 @@ async function qaNode(state) {
             (0, logger_1.log)('QA_VISUAL', 'skipped', { reason: 'max_iteration', iteration: state.iterationCount });
             emitter_1.emitter.stepStart("qa_visual", state.iterationCount);
             emitter_1.emitter.stepDone("qa_visual", state.iterationCount);
-            return { status: "success", errorLogs: null, messages: state.messages };
+            return { status: "success", errorLogs: null, messages: state.messages, costTracker };
         }
         emitter_1.emitter.stepStart("qa_visual", state.iterationCount);
         const visualStart = Date.now();
@@ -779,7 +828,7 @@ async function qaNode(state) {
             if (!dc) {
                 (0, logger_1.log)('QA_VISUAL', 'no_dom_checks', { screenshotKeys: screenshots ? Object.keys(screenshots) : [] });
                 emitter_1.emitter.stepDone("qa_visual", state.iterationCount);
-                return { status: "success", errorLogs: null, messages: state.messages };
+                return { status: "success", errorLogs: null, messages: state.messages, costTracker };
             }
             (0, logger_1.log)('QA_VISUAL', 'dom_checks', {
                 rtl: dc.hasRtlDir,
@@ -796,12 +845,14 @@ async function qaNode(state) {
                 emitter_1.emitter.stepFailed("qa_visual", "Page is blank or nearly empty", state.iterationCount);
                 return {
                     status: "failed",
-                    errorLogs: `Visual QA: Page is blank or nearly empty (${dc.bodyTextLength} chars of text). Check App.tsx exports a proper component tree and all sections render Hebrew content.`,
+                    errorLogs: `Visual QA: Page is blank or nearly empty (${dc.bodyTextLength} chars of text). Check App.tsx exports a proper component tree and all sections render visible content.`,
                     messages: state.messages,
+                    costTracker,
                 };
             }
             const spec = await tools_1.tools.readFile(state.sandboxPath, "spec.md");
-            const visualResult = await (0, tools_2.runVisualReview)(screenshots, spec);
+            const qaDesignSystem = state.designSystem;
+            const visualResult = await (0, tools_2.runVisualReview)(screenshots, spec, qaDesignSystem);
             (0, logger_1.log)('QA_VISUAL', 'vision_score', {
                 score: visualResult.score,
                 passed: visualResult.passed,
@@ -813,7 +864,9 @@ async function qaNode(state) {
             if (visualResult.passed) {
                 (0, logger_1.log)('QA_VISUAL', 'passed', { score: visualResult.score });
                 emitter_1.emitter.stepDone("qa_visual", state.iterationCount);
-                return { status: "success", errorLogs: null, messages: state.messages };
+                const total = costTracker.total();
+                (0, logger_1.log)('COST', 'pipeline_total', { costUSD: Number(total.estimatedCostUSD.toFixed(4)), inputTokens: total.inputTokens, outputTokens: total.outputTokens });
+                return { status: "success", errorLogs: null, messages: state.messages, costTracker };
             }
             // Visual QA failed — try to refine key components via 21st.dev before handing back to developer
             const errorReport = (0, tools_2.formatVisualErrors)(visualResult);
@@ -823,13 +876,14 @@ async function qaNode(state) {
                 status: "failed",
                 errorLogs: `Visual QA failed (score: ${visualResult.score}/10):\n${errorReport}`,
                 messages: state.messages,
+                costTracker,
             };
         }
         catch (err) {
             // Playwright/screenshot failure is non-blocking — pass with a warning
             (0, logger_1.log)('QA_VISUAL', 'error_non_blocking', { error: err.message });
             emitter_1.emitter.stepDone("qa_visual", state.iterationCount);
-            return { status: "success", errorLogs: null, messages: state.messages };
+            return { status: "success", errorLogs: null, messages: state.messages, costTracker };
         }
     }
     catch (err) {
@@ -840,6 +894,7 @@ async function qaNode(state) {
             status: "failed",
             errorLogs: `QA node failed: ${err.message}`,
             messages: state.messages,
+            costTracker,
         };
     }
 }
@@ -868,7 +923,9 @@ const workflow = new langgraph_1.StateGraph({
         status: null,
         messages: null,
         errorLogs: null,
-        iterationCount: null
+        iterationCount: null,
+        designSystem: null,
+        costTracker: null,
     }
 })
     .addNode("productManager", productManagerNode)

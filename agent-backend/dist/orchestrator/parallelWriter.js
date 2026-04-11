@@ -50,16 +50,51 @@ const opusModel = process.env.ANTHROPIC_API_KEY
     : new openai_1.ChatOpenAI({ modelName: "gpt-4o", temperature: 0 });
 const fallbackModel = new openai_1.ChatOpenAI({ modelName: "gpt-4o", temperature: 0 });
 const MAX_CONCURRENT_SONNET = 3;
+function getLayoutDirective(comp) {
+    const name = comp.componentName.toLowerCase();
+    const desc = comp.sectionDescription.toLowerCase();
+    if (name === "navbar") {
+        return `LTR COMPOSITION REQUIREMENT:
+- Brand/logo stays on the left.
+- Navigation and actions flow left-to-right across the bar.
+- Do not mirror the navbar or place the primary brand block on the right.`;
+    }
+    if (name === "hero") {
+        return `LTR COMPOSITION REQUIREMENT:
+- On desktop, the primary text column MUST be on the left and the supporting product/dashboard visual MUST be on the right.
+- Headline, subheadline, CTA row, trust badges, and metric groups must be left-aligned.
+- Do not create a right-anchored hero. Do not make the main reading flow start on the right.`;
+    }
+    if (name.includes("dashboard") || name.includes("feature") || name.includes("bento")) {
+        return `LTR COMPOSITION REQUIREMENT:
+- The section must read naturally from left to right.
+- Explanatory copy and labels should start from the left/start edge.
+- Internal cards, metrics, chart legends, labels, and descriptions should be left-aligned.
+- A centered section heading is acceptable only if the spec explicitly implies a centered intro, but the section must still preserve left-to-right reading flow internally.`;
+    }
+    if (desc.includes("center-aligned") || desc.includes("center aligned") || name.includes("cta")) {
+        return `LTR COMPOSITION REQUIREMENT:
+- This section may use a centered intro if the spec calls for it.
+- Even when centered, buttons, badge groups, and supporting rows must still preserve standard LTR ordering.
+- Do not right-align the section.`;
+    }
+    return `LTR COMPOSITION REQUIREMENT:
+- Default to left-aligned headings, body copy, labels, and CTA groups.
+- Use items-start, justify-start, and text-left unless the spec explicitly calls for centered alignment.
+- Do not place the main visual weight or primary copy block on the right.`;
+}
 async function writeSingleComponent(comp, sharedContext, designTokenBlock, brief, tier) {
     const startMs = Date.now();
     const model = tier === 1 ? opusModel : sonnetModel;
     const modelName = tier === 1 ? 'opus' : 'sonnet';
     const briefSection = brief
-        ? `\n21ST.DEV DESIGN BRIEF (adapt these patterns for this component):
+        ? `\n21ST.DEV STRUCTURAL INSPIRATION (borrow composition and interaction ideas only):
 ${brief}
+
+DO NOT COPY COLORS, STYLE TREATMENT, OR VISUAL MOOD FROM THE REFERENCE IF IT CONFLICTS WITH THE DESIGN TOKENS OR ANTI-PATTERNS.
 `
         : '';
-    const prompt = `You are an elite frontend developer creating ONE React component for a PREMIUM Hebrew Next.js landing page.
+    const prompt = `You are an elite frontend developer creating ONE React component for a PREMIUM Next.js landing page.
 This is NOT a wireframe or prototype — it must look like a production site from a top design agency.
 Output EXACTLY one <file path="${comp.filename}"> block. No explanation, no other text.
 
@@ -72,15 +107,17 @@ YOUR COMPONENT: ${comp.componentName} (${comp.filename})
 SECTION DETAILS FROM SPEC:
 ${comp.sectionDescription}
 
+${getLayoutDirective(comp)}
+
 IMPLEMENTATION RULES:
 1. Export a single default function component named ${comp.componentName}.
 2. Use the exact hex colors from the Color Palette above. Do NOT invent colors.
-3. Use the Design Tokens above for ALL styling — cards, buttons, headings, animations. Do NOT deviate.
+3. Use the Design Tokens above for ALL styling — cards, buttons, headings, backgrounds, and animations. The Design Tokens are authoritative and override any reference styling.
 4. ANIMATIONS ARE MANDATORY: import { motion } from 'framer-motion'. Use the exact animation tokens above.
    - Every section: viewport-triggered entrance with stagger on children
    - Cards: whileHover with y:-5 and scale:1.02
 5. Import icons from 'lucide-react' as needed. Use them decoratively, not just functionally.
-6. All text must be in Hebrew. Use text-right and RTL-compatible layouts (flex-row-reverse where needed).
+6. All text should be in English. Maintain standard modern left-to-right (LTR) reading flow.
 7. IMAGES: Use next/image's Image component. Import: import Image from "next/image".
    - Use real Unsplash photo URLs: https://images.unsplash.com/photo-XXXX?auto=format&fit=crop&w=800&q=80
    - For PEOPLE (team, testimonials): vary the photo ID for each person
@@ -90,7 +127,10 @@ IMPLEMENTATION RULES:
 10. Add "use client" at the top (needed for framer-motion and interactivity).
 11. TypeScript: use React.FC or function syntax, no \`any\` types.
 12. MINIMUM 80 lines of JSX. Premium site — add visual richness: decorative gradients, blur orbs, borders, shadows, hover effects.
-13. If the design brief mentions specific techniques (e.g., staggered grid, glassmorphism cards), implement them faithfully.`;
+13. Use the 21st.dev brief for structure, rhythm, composition, and interaction ideas. Do NOT inherit its palette or overall aesthetic if they conflict with the design system.
+14. If the reference implies an anti-pattern listed above, ignore that part and stay consistent with the design system.
+15. Keep all sections visually coherent with the same style family. Do not mix editorial, glass, brutal, or luxury treatments within one component unless explicitly directed by the design tokens.
+16. Preserve true LTR composition. Avoid layouts that feel mirrored or RTL-like. On desktop split sections, primary copy should start on the left unless the spec explicitly says otherwise.`;
     let response;
     let usedModel = modelName;
     try {
@@ -129,14 +169,14 @@ IMPLEMENTATION RULES:
 // ─── globals.css generation (deterministic) ─────────────────────────────────
 function generateGlobalsCss(ds) {
     const cssImport = ds?.typography.cssImport
-        || "@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;700;900&display=swap');";
-    const bodyFont = ds?.typography.bodyFont || 'Heebo';
-    const headingFont = ds?.typography.headingFont || 'Heebo';
+        || "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700;900&display=swap');";
+    const bodyFont = ds?.typography.bodyFont || 'Inter';
+    const headingFont = ds?.typography.headingFont || 'Inter';
     const fontFamilyParts = [bodyFont];
     if (headingFont !== bodyFont)
         fontFamilyParts.unshift(headingFont);
-    if (!fontFamilyParts.includes('Heebo'))
-        fontFamilyParts.push('Heebo');
+    if (!fontFamilyParts.includes('Inter'))
+        fontFamilyParts.push('Inter');
     const fontFamily = fontFamilyParts.map(f => `'${f}'`).join(', ') + ', sans-serif';
     return `${cssImport}
 
@@ -147,7 +187,6 @@ function generateGlobalsCss(ds) {
 @layer base {
     html {
         font-family: ${fontFamily};
-        direction: rtl;
     }
     body {
         @apply antialiased;
@@ -172,7 +211,7 @@ export const dynamic = 'force-dynamic';
 
 export default function Home() {
   return (
-    <main dir="rtl" className="min-h-screen bg-gradient-to-b ${bgGradient}">
+    <main className="min-h-screen bg-gradient-to-b ${bgGradient}">
 ${renders}
     </main>
   );

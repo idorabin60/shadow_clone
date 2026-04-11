@@ -31,7 +31,8 @@ const FILE_REGEX = /<file[^>]*path=["']([^"']+)["'][^>]*>\n*([\s\S]*?)\n*<\/file
 
 export function parseXmlFiles(
     rawContent: string,
-    errorLogs: string | null
+    errorLogs: string | null,
+    iterationCount?: number,
 ): XmlParseResult {
     const files: ParsedFile[] = [];
     const guardErrors: string[] = [];
@@ -60,7 +61,7 @@ export function parseXmlFiles(
         }
 
         // Guard 2: Scaffold Lock
-        if (isProtected(filePath) && !shouldAllowProtectedWrite(errorLogs)) {
+        if (isProtected(filePath) && !shouldAllowProtectedWrite(errorLogs, filePath, iterationCount)) {
             log('GUARD', 'scaffold_blocked', { path: filePath });
             guardErrors.push(
                 `Modification to protected file '${filePath}' is blocked. Only touch src/ application files.`

@@ -62,6 +62,45 @@ interface ComponentWriteResult {
     content: string;
 }
 
+function getLayoutDirective(comp: ComponentSpec): string {
+    const name = comp.componentName.toLowerCase();
+    const desc = comp.sectionDescription.toLowerCase();
+
+    if (name === "navbar") {
+        return `LTR COMPOSITION REQUIREMENT:
+- Brand/logo stays on the left.
+- Navigation and actions flow left-to-right across the bar.
+- Do not mirror the navbar or place the primary brand block on the right.`;
+    }
+
+    if (name === "hero") {
+        return `LTR COMPOSITION REQUIREMENT:
+- On desktop, the primary text column MUST be on the left and the supporting product/dashboard visual MUST be on the right.
+- Headline, subheadline, CTA row, trust badges, and metric groups must be left-aligned.
+- Do not create a right-anchored hero. Do not make the main reading flow start on the right.`;
+    }
+
+    if (name.includes("dashboard") || name.includes("feature") || name.includes("bento")) {
+        return `LTR COMPOSITION REQUIREMENT:
+- The section must read naturally from left to right.
+- Explanatory copy and labels should start from the left/start edge.
+- Internal cards, metrics, chart legends, labels, and descriptions should be left-aligned.
+- A centered section heading is acceptable only if the spec explicitly implies a centered intro, but the section must still preserve left-to-right reading flow internally.`;
+    }
+
+    if (desc.includes("center-aligned") || desc.includes("center aligned") || name.includes("cta")) {
+        return `LTR COMPOSITION REQUIREMENT:
+- This section may use a centered intro if the spec calls for it.
+- Even when centered, buttons, badge groups, and supporting rows must still preserve standard LTR ordering.
+- Do not right-align the section.`;
+    }
+
+    return `LTR COMPOSITION REQUIREMENT:
+- Default to left-aligned headings, body copy, labels, and CTA groups.
+- Use items-start, justify-start, and text-left unless the spec explicitly calls for centered alignment.
+- Do not place the main visual weight or primary copy block on the right.`;
+}
+
 async function writeSingleComponent(
     comp: ComponentSpec,
     sharedContext: string,
@@ -74,8 +113,10 @@ async function writeSingleComponent(
     const modelName = tier === 1 ? 'opus' : 'sonnet';
 
     const briefSection = brief
-        ? `\n21ST.DEV DESIGN BRIEF (adapt these patterns for this component):
+        ? `\n21ST.DEV STRUCTURAL INSPIRATION (borrow composition and interaction ideas only):
 ${brief}
+
+DO NOT COPY COLORS, STYLE TREATMENT, OR VISUAL MOOD FROM THE REFERENCE IF IT CONFLICTS WITH THE DESIGN TOKENS OR ANTI-PATTERNS.
 `
         : '';
 
@@ -92,10 +133,12 @@ YOUR COMPONENT: ${comp.componentName} (${comp.filename})
 SECTION DETAILS FROM SPEC:
 ${comp.sectionDescription}
 
+${getLayoutDirective(comp)}
+
 IMPLEMENTATION RULES:
 1. Export a single default function component named ${comp.componentName}.
 2. Use the exact hex colors from the Color Palette above. Do NOT invent colors.
-3. Use the Design Tokens above for ALL styling — cards, buttons, headings, animations. Do NOT deviate.
+3. Use the Design Tokens above for ALL styling — cards, buttons, headings, backgrounds, and animations. The Design Tokens are authoritative and override any reference styling.
 4. ANIMATIONS ARE MANDATORY: import { motion } from 'framer-motion'. Use the exact animation tokens above.
    - Every section: viewport-triggered entrance with stagger on children
    - Cards: whileHover with y:-5 and scale:1.02
@@ -110,7 +153,10 @@ IMPLEMENTATION RULES:
 10. Add "use client" at the top (needed for framer-motion and interactivity).
 11. TypeScript: use React.FC or function syntax, no \`any\` types.
 12. MINIMUM 80 lines of JSX. Premium site — add visual richness: decorative gradients, blur orbs, borders, shadows, hover effects.
-13. If the design brief mentions specific techniques (e.g., staggered grid, glassmorphism cards), implement them faithfully.`;
+13. Use the 21st.dev brief for structure, rhythm, composition, and interaction ideas. Do NOT inherit its palette or overall aesthetic if they conflict with the design system.
+14. If the reference implies an anti-pattern listed above, ignore that part and stay consistent with the design system.
+15. Keep all sections visually coherent with the same style family. Do not mix editorial, glass, brutal, or luxury treatments within one component unless explicitly directed by the design tokens.
+16. Preserve true LTR composition. Avoid layouts that feel mirrored or RTL-like. On desktop split sections, primary copy should start on the left unless the spec explicitly says otherwise.`;
 
     let response;
     let usedModel = modelName;

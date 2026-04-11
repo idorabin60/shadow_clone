@@ -14,7 +14,7 @@ import { createDevTools } from './devTools';
 import { pruneToTokenBudget, getContentString, estimateTokens } from './contextManager';
 import { classifyError, buildTargetedFixPrompt } from './errorClassifier';
 import { writeAllComponentsParallel } from './parallelWriter';
-import { generateDesignSystem, DesignSystemRecommendation, generateDesignTokenBlock } from './designSystem';
+import { generateDesignSystem, generateDesignTokenBlock } from './designSystem';
 import { distillInspiration, InspirationBriefMap } from './inspirationDistiller';
 import { parseSpecComponents } from './specParser';
 import { z } from 'zod';
@@ -87,6 +87,7 @@ const DevMemorySchema = z.object({
 async function productManagerNode(state: OrchestrationState): Promise<Partial<OrchestrationState>> {
     const sandboxId = state.sandboxPath.split('/').pop() ?? state.sandboxPath;
     const pmStart = Date.now();
+    const costTracker = state.costTracker ?? new CostTracker();
     log('PM', 'start', { sandboxId, businessName: (state.businessInput as any)?.businessName });
     log('PM', 'model_check', {
         hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
@@ -103,8 +104,8 @@ async function productManagerNode(state: OrchestrationState): Promise<Partial<Or
 
     let designQuery = 'business website';
     try {
-        const classifyResponse = await openaiModel.invoke([
-            new SystemMessage('Extract 2-5 English keywords describing this business type and tone. Output ONLY the keywords separated by spaces. Example: "luxury restaurant fine dining". No other text.'),
+        const classifyResponse = await pmModel.invoke([
+            new SystemMessage('Extract 5-8 English keywords describing the business type, tone, and specific UI/visual requests (e.g., "dark theme", "glassmorphism", "bento grid", "luxury"). Output ONLY the keywords separated by spaces. No other text.'),
             new HumanMessage(rawInput),
         ]);
         const keywords = (classifyResponse.content as string).trim();
@@ -118,8 +119,7 @@ async function productManagerNode(state: OrchestrationState): Promise<Partial<Or
 
     const designSystem = await generateDesignSystem(designQuery);
 
-    // Store on state for downstream nodes (parallel writer, dev prompt)
-    (state as any).__designSystem = designSystem;
+    // Design system is now a proper typed field on OrchestrationState
 
     const systemPrompt = `You are a world-class UI/UX Designer and Brand Strategist for a premium landing page builder.
 Your job is to analyse the client's business and produce a precise, structured spec.md that leaves zero ambiguity for the developer.
@@ -148,6 +148,10 @@ You MUST output spec.md using EXACTLY this structure (fill every section based o
 - Tone: [Professional / Playful / Luxurious / Trustworthy / Bold / Minimalist — pick based on business]
 - Primary CTA: [exact button text, e.g. "Get Started Now"]
 - Value Proposition: [one sentence describing the core offer]
+
+## Visual & Layout Directives
+- User's Requested UI Style/Theme: [explicit definition from input]
+- Specific Layout Requests: [explicit constraints from input, e.g. Bento grid]
 
 ## Color Palette
 Use the recommended colors as your starting point. Fine-tune if needed for this specific brand.
@@ -220,12 +224,12 @@ Output ONLY the spec.md content wrapped in a markdown code block. No other text.
         return {
             status: "failed",
             errorLogs: `Product Manager step failed: ${err.message}`,
-            messages: state.messages
+            messages: state.messages,
+            costTracker,
         };
     }
 
     // Cost tracking
-    const costTracker = new CostTracker();
     const pmUsage = (response as any)?.usage_metadata;
     costTracker.record('PM', 'claude-sonnet-4-6', pmUsage);
 
@@ -252,6 +256,16 @@ Output ONLY the spec.md content wrapped in a markdown code block. No other text.
     // Use the write tool to save it
     await tools.writeFile(state.sandboxPath, "spec.md", specContent);
     log('PM', 'spec_written', { chars: specContent.length });
+
+    // Sync custom colors and directives from spec.md back to the designSystem state
+    const colorBg = specContent.match(/- Background:\s*([^\n]+)/);
+    if (colorBg) designSystem.colors.background = colorBg[1].trim();
+
+    const colorText = specContent.match(/- Text Primary:\s*([^\n]+)/);
+    if (colorText) designSystem.colors.text = colorText[1].trim();
+
+    const colorAccent = specContent.match(/- Accent.*:\s*([^\n]+)/);
+    if (colorAccent) designSystem.colors.accent = colorAccent[1].replace(/\(.*\)/g, '').trim();
 
     // Save design system recommendation for downstream nodes (parallel writer, dev prompt)
     await tools.writeFile(state.sandboxPath, "design_system.json", JSON.stringify(designSystem, null, 2));
@@ -316,7 +330,9 @@ Output ONLY the spec.md content wrapped in a markdown code block. No other text.
 
     return {
         status: "coding",
-        messages: state.messages
+        messages: state.messages,
+        designSystem,
+        costTracker,
     };
 }
 
@@ -328,6 +344,7 @@ Output ONLY the spec.md content wrapped in a markdown code block. No other text.
 async function developerNode(state: OrchestrationState): Promise<Partial<OrchestrationState>> {
     const sandboxId = state.sandboxPath.split('/').pop() ?? state.sandboxPath;
     const devStart = Date.now();
+    const costTracker = state.costTracker ?? new CostTracker();
     log('DEV', 'start', { sandboxId, iteration: state.iterationCount, hasErrors: !!state.errorLogs });
     emitter.stepStart("developer", state.iterationCount);
     const spec = await tools.readFile(state.sandboxPath, "spec.md");
@@ -396,12 +413,8 @@ Use this to understand what has already been built and what remains. You will up
         } catch { /* non-blocking */ }
     }
 
-    // Read design system for dynamic dev prompt rules
-    let devDesignSystem: DesignSystemRecommendation | null = null;
-    try {
-        const dsRaw = await tools.readFile(state.sandboxPath, "design_system.json");
-        if (!dsRaw.startsWith("Error")) devDesignSystem = JSON.parse(dsRaw);
-    } catch { /* use fallback rules */ }
+    // Use design system from typed state (set by PM node)
+    const devDesignSystem = state.designSystem;
 
     const dsRules = devDesignSystem
         ? generateDesignTokenBlock(devDesignSystem)
@@ -453,6 +466,10 @@ MANDATORY DESIGN & IMPLEMENTATION RULES:
    Choose photos relevant to the business — read the spec.md Image Strategy section for the correct themes.
    Hero backgrounds: use w=1600. Card images: use w=800.
 6. Layout: Build a highly structured Left-To-Right (LTR) application layout. Use clean standard grids and flexbox.
+   - On desktop split sections, primary copy belongs on the left and supporting product/dashboard visuals belong on the right unless spec.md explicitly says otherwise.
+   - Default to text-left, items-start, and justify-start for headings, body copy, CTA rows, metrics, legends, and labels.
+   - A centered section intro is allowed only when spec.md clearly implies it; the internal reading flow must still remain LTR.
+   - Never produce a layout that feels mirrored or RTL-like without an explicit instruction.
 7. Component naming: navigation MUST be Navbar.tsx. Never Navigation.tsx.
 8. Build EVERY component listed in spec.md Component List — do not skip any section.
 9. Copywriting: use the actual English content from spec.md, not generic placeholders.
@@ -467,6 +484,11 @@ CRITICAL WORKFLOW (PATCH -> VERIFY):
 3. VERIFY: your XML is auto-extracted and tsc --noEmit is run. Fix any errors in the next step.
 
 Your task: Fix any TypeScript errors or QA issues in the generated components. Output only the files that need changes.
+
+Here are the exact business requirements requested by the client:
+=========================================
+${typeof state.businessInput === 'string' ? state.businessInput : JSON.stringify(state.businessInput, null, 2)}
+=========================================
 
 Here is the exact spec.md written by the UX Architect:
 =========================================
@@ -504,7 +526,7 @@ ${errorContext}`;
         }));
     }
 
-    let maxSteps = 100;
+    let maxSteps = 15; // Realistic cap: a few tool-read steps + 2 patch attempts + TS checks
     let steps = 0;
     const writtenFiles: string[] = []; // track for memory update context
     let lastTsError: string | null = null; // track for Task 3.3 exit state passthrough
@@ -518,18 +540,14 @@ ${errorContext}`;
         emitter.info("developer", "Starting tiered component generation...");
         log('DEV', 'parallel_first_pass_start', {});
 
-        // Read design system saved by PM node
-        let dsForParallel: DesignSystemRecommendation | null = null;
-        try {
-            const dsRaw = await tools.readFile(state.sandboxPath, "design_system.json");
-            if (!dsRaw.startsWith("Error")) dsForParallel = JSON.parse(dsRaw);
-        } catch { /* fallback to null — parallel writer uses defaults */ }
+        // Use design system from typed state (set by PM node)
+        const dsForParallel = state.designSystem;
 
         // Distill 21st.dev inspiration briefs before writing any components
         const specComponents = parseSpecComponents(spec);
         let briefs: InspirationBriefMap = {};
         try {
-            briefs = await distillInspiration(specComponents, state.sandboxPath);
+            briefs = await distillInspiration(specComponents, state.sandboxPath, dsForParallel);
             log('DEV', 'inspiration_briefs_ready', { count: Object.keys(briefs).length });
         } catch (e: any) {
             log('DEV', 'inspiration_distill_error', { error: e.message });
@@ -588,7 +606,13 @@ ${errorContext}`;
     // ── PHASE B: Sequential fix loop ────────────────────────────────────
     // Runs when: (a) parallel pass had TS errors, or (b) this is a fix iteration from QA
     const invokeWithBackoff = async (model: any, msgs: any[]): Promise<AIMessage> => {
-        const payload = [new SystemMessage(prompt), ...msgs];
+        let payloadMsgs = [...msgs];
+        // Anthropic API guard: prevent "assistant message prefill" crashes
+        if (payloadMsgs.length > 0 && payloadMsgs[payloadMsgs.length - 1]._getType() !== 'human') {
+            payloadMsgs.push(new HumanMessage("Please review the system prompt and provide the necessary <file> block updates to fix the QA errors."));
+        }
+
+        const payload = [new SystemMessage(prompt), ...payloadMsgs];
         // Native LangChain fallbacks automatically handle 429 and 500 errors by routing to GPT-4o
         return await withTimeout<AIMessage>(model.invoke(payload), TIMEOUTS.devLoopStep, 'DEV');
     };
@@ -607,6 +631,7 @@ ${errorContext}`;
         let response: AIMessage;
         try {
             response = await invokeWithBackoff(modelWithTools, currentMessages);
+            costTracker.record('DEV', 'claude-opus-4-6', (response as any)?.usage_metadata);
         } catch (e: any) {
             // TimeoutError or LLM failure — exit the loop gracefully instead of crashing
             log('DEV', 'invoke_error', { step: steps, error: e.message, name: e.name });
@@ -620,7 +645,7 @@ ${errorContext}`;
 
         if (response.content && typeof response.content === "string" && response.content.trim().length > 0) {
             // XML Artifact Extraction — guards and stripping handled in xmlParser.ts
-            const parseResult = parseXmlFiles(response.content, state.errorLogs);
+            const parseResult = parseXmlFiles(response.content, state.errorLogs, state.iterationCount);
 
             for (const { path: filePath, content: fileContent } of parseResult.files) {
                 emitter.fileActivity("developer", filePath, "created");
@@ -756,24 +781,22 @@ ${errorContext}`;
                 ? `Developer loop timed out after ${steps} steps — QA will re-run TypeScript to assess state.`
                 : null; // 'done' and 'ts_passed' → clean exit, let QA start fresh
 
+    const devTotal = costTracker.total();
     log('DEV', 'done', {
         iteration: state.iterationCount,
         exitReason,
         steps,
         elapsedMs: Date.now() - devStart,
         outgoingErrorLogs: !!outgoingErrorLogs,
+        totalCostUSD: Number(devTotal.estimatedCostUSD.toFixed(4)),
     });
 
     // Update dev_memory.json with session state for the next iteration.
-    // Uses GPT-4o (cheap) — not the Opus dev model. Non-blocking on failure.
-    // Task 2.3: Use structured output (JSON mode) — no XML regex, no silent failures.
-    // Pass explicit session context (files written + errors) instead of last 5 messages.
+    // Uses GPT-4o structured output for new decisions/issues, then merges with
+    // the previous memory to guarantee completed components are never lost.
     log('MEMORY', 'update_start', { filesWritten: writtenFiles.length });
     try {
-        const memUpdatePrompt = `Update the dev_memory.json based on this development session.
-
-Current memory:
-${JSON.stringify(devMemory, null, 2)}
+        const memUpdatePrompt = `Based on this development session, provide ONLY NEW information to merge into dev_memory.json.
 
 Files written this session: ${writtenFiles.length > 0 ? writtenFiles.join(', ') : 'none'}
 TypeScript/build errors fixed: ${exitReason === 'ts_passed' ? 'yes' : 'no'}
@@ -781,20 +804,37 @@ Session exit reason: ${exitReason}
 QA errors from previous iteration: ${state.errorLogs ? state.errorLogs.substring(0, 300) : 'none'}
 
 Rules:
-- Move all files from "Files written this session" into components_completed if they are complete
-- Add key design decisions (colors, fonts, layout patterns) to design_decisions
-- Clear known_issues if exitReason is ts_passed, otherwise list remaining issues
-- Set next_steps to what the QA pipeline will likely require next
-- Keep intent unchanged`;
+- components_completed: list ONLY the new files written this session (they will be merged with existing)
+- design_decisions: list ONLY new decisions made this session
+- known_issues: list current issues (these REPLACE previous — empty array if ts_passed)
+- next_steps: list what QA will likely require next (these REPLACE previous)
+- intent: keep the same as: "${devMemory.intent}"`;
 
         const memModel = openaiModel.withStructuredOutput(DevMemorySchema);
-        const updatedMem = await memModel.invoke([new SystemMessage(memUpdatePrompt)]);
+        const llmUpdate = await memModel.invoke([new SystemMessage(memUpdatePrompt)]);
 
-        await tools.writeFile(state.sandboxPath, "dev_memory.json", JSON.stringify(updatedMem, null, 2));
+        // Merge: union previous + new for cumulative fields, replace for current-state fields
+        const prevCompleted = new Set(devMemory.components_completed);
+        for (const c of llmUpdate.components_completed) prevCompleted.add(c);
+        // Also add files we know were written (ground truth, not LLM-dependent)
+        for (const f of writtenFiles) prevCompleted.add(f);
+
+        const prevDecisions = new Set(devMemory.design_decisions);
+        for (const d of llmUpdate.design_decisions) prevDecisions.add(d);
+
+        const mergedMemory: DevMemory = {
+            intent: devMemory.intent, // never change — ground truth from user
+            components_completed: [...prevCompleted],
+            design_decisions: [...prevDecisions],
+            known_issues: llmUpdate.known_issues, // replace — reflects current state
+            next_steps: llmUpdate.next_steps,      // replace — reflects current state
+        };
+
+        await tools.writeFile(state.sandboxPath, "dev_memory.json", JSON.stringify(mergedMemory, null, 2));
         log('MEMORY', 'update_done', {
-            completedComponents: updatedMem.components_completed.length,
-            nextSteps: updatedMem.next_steps.length,
-            knownIssues: updatedMem.known_issues.length,
+            completedComponents: mergedMemory.components_completed.length,
+            nextSteps: mergedMemory.next_steps.length,
+            knownIssues: mergedMemory.known_issues.length,
         });
         emitter.info("developer", "Session memory updated");
     } catch (e: any) {
@@ -812,6 +852,7 @@ Rules:
         status: "qa",
         iterationCount: state.iterationCount + 1,
         messages: outgoingMessages,
+        costTracker,
         // Task 3.3: pass error context forward on unclean exits so QA has full picture
         ...(outgoingErrorLogs !== null ? { errorLogs: outgoingErrorLogs } : {}),
     };
@@ -824,6 +865,7 @@ Rules:
 async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationState>> {
     const sandboxId = state.sandboxPath.split('/').pop() ?? state.sandboxPath;
     const qaStart = Date.now();
+    const costTracker = state.costTracker ?? new CostTracker();
     log('QA_TS', 'start', { sandboxId, iteration: state.iterationCount });
 
     try {
@@ -841,6 +883,7 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
                 status: "failed",
                 errorLogs: `TypeScript TypeCheck failed:\n${tsResult}`,
                 messages: state.messages,
+                costTracker,
             };
         }
 
@@ -858,6 +901,7 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
                 status: "failed",
                 errorLogs: `Next.js Build failed:\n${buildResult}`,
                 messages: state.messages,
+                costTracker,
             };
         }
 
@@ -869,7 +913,7 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
             log('QA_VISUAL', 'skipped', { reason: 'max_iteration', iteration: state.iterationCount });
             emitter.stepStart("qa_visual", state.iterationCount);
             emitter.stepDone("qa_visual", state.iterationCount);
-            return { status: "success", errorLogs: null, messages: state.messages };
+            return { status: "success", errorLogs: null, messages: state.messages, costTracker };
         }
 
         emitter.stepStart("qa_visual", state.iterationCount);
@@ -886,7 +930,7 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
             if (!dc) {
                 log('QA_VISUAL', 'no_dom_checks', { screenshotKeys: screenshots ? Object.keys(screenshots) : [] });
                 emitter.stepDone("qa_visual", state.iterationCount);
-                return { status: "success", errorLogs: null, messages: state.messages };
+                return { status: "success", errorLogs: null, messages: state.messages, costTracker };
             }
 
             log('QA_VISUAL', 'dom_checks', {
@@ -907,11 +951,14 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
                     status: "failed",
                     errorLogs: `Visual QA: Page is blank or nearly empty (${dc.bodyTextLength} chars of text). Check App.tsx exports a proper component tree and all sections render visible content.`,
                     messages: state.messages,
+                    costTracker,
                 };
             }
 
             const spec = await tools.readFile(state.sandboxPath, "spec.md");
-            const visualResult = await runVisualReview(screenshots, spec);
+            const qaDesignSystem = state.designSystem;
+
+            const visualResult = await runVisualReview(screenshots, spec, qaDesignSystem);
             log('QA_VISUAL', 'vision_score', {
                 score: visualResult.score,
                 passed: visualResult.passed,
@@ -925,7 +972,9 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
             if (visualResult.passed) {
                 log('QA_VISUAL', 'passed', { score: visualResult.score });
                 emitter.stepDone("qa_visual", state.iterationCount);
-                return { status: "success", errorLogs: null, messages: state.messages };
+                const total = costTracker.total();
+                log('COST', 'pipeline_total', { costUSD: Number(total.estimatedCostUSD.toFixed(4)), inputTokens: total.inputTokens, outputTokens: total.outputTokens });
+                return { status: "success", errorLogs: null, messages: state.messages, costTracker };
             }
 
             // Visual QA failed — try to refine key components via 21st.dev before handing back to developer
@@ -937,12 +986,13 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
                 status: "failed",
                 errorLogs: `Visual QA failed (score: ${visualResult.score}/10):\n${errorReport}`,
                 messages: state.messages,
+                costTracker,
             };
         } catch (err: any) {
             // Playwright/screenshot failure is non-blocking — pass with a warning
             log('QA_VISUAL', 'error_non_blocking', { error: err.message });
             emitter.stepDone("qa_visual", state.iterationCount);
-            return { status: "success", errorLogs: null, messages: state.messages };
+            return { status: "success", errorLogs: null, messages: state.messages, costTracker };
         }
     } catch (err: any) {
         // Top-level catch: TimeoutError from tsc/build, or any unexpected failure
@@ -952,6 +1002,7 @@ async function qaNode(state: OrchestrationState): Promise<Partial<OrchestrationS
             status: "failed",
             errorLogs: `QA node failed: ${err.message}`,
             messages: state.messages,
+            costTracker,
         };
     }
 }
@@ -982,7 +1033,9 @@ const workflow = new StateGraph<OrchestrationState>({
         status: null as any,
         messages: null as any,
         errorLogs: null as any,
-        iterationCount: null as any
+        iterationCount: null as any,
+        designSystem: null as any,
+        costTracker: null as any,
     }
 })
     .addNode("productManager", productManagerNode)

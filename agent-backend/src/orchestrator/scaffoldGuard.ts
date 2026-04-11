@@ -8,26 +8,56 @@
  * Exception: if QA error logs explicitly mention a config file, allow the write.
  */
 
-export const PROTECTED_FILES = [
-    "tailwind.config.js",
+/**
+ * Fully locked — never writable unless QA error logs reference them.
+ * tailwind.config.js is handled separately as a "soft-protected" file.
+ */
+export const HARD_PROTECTED_FILES = [
     "next.config.mjs",
     "tsconfig.json",
     "postcss.config.js",
-    "src/app/layout.tsx",
     "src/app/not-found.tsx",
     "src/app/error.tsx",
     "src/pages/_error.tsx",
 ] as const;
 
-/** Returns true if the file path ends with a protected scaffold filename. */
+/**
+ * Soft-protected — allowed on the initial generation pass (iteration 0)
+ * because the developer often needs to add custom design-system colors/fonts.
+ * Locked on subsequent fix iterations unless QA errors reference them.
+ */
+export const SOFT_PROTECTED_FILES = [
+    "tailwind.config.js",
+    "src/app/layout.tsx",
+] as const;
+
+const ALL_PROTECTED = [...HARD_PROTECTED_FILES, ...SOFT_PROTECTED_FILES];
+
+/** Returns true if the file path ends with any protected scaffold filename. */
 export const isProtected = (filePath: string): boolean =>
-    PROTECTED_FILES.some(pf => filePath.endsWith(pf));
+    ALL_PROTECTED.some(pf => filePath.endsWith(pf));
+
+/** Returns true if the file is only soft-protected (allowed on iteration 0). */
+export const isSoftProtected = (filePath: string): boolean =>
+    SOFT_PROTECTED_FILES.some(pf => filePath.endsWith(pf));
 
 /**
- * Returns true only when QA error logs explicitly reference a config file,
- * meaning the scaffold itself caused the failure and must be patched.
+ * Decides if a write to a protected file should be allowed.
+ *
+ * @param errorLogs - current QA error logs (if any)
+ * @param iterationCount - current dev↔QA iteration (0 = first pass)
  */
-export const shouldAllowProtectedWrite = (errorLogs: string | null): boolean => {
+export const shouldAllowProtectedWrite = (
+    errorLogs: string | null,
+    filePath?: string,
+    iterationCount?: number,
+): boolean => {
+    // Soft-protected files are allowed on the initial generation (iteration 0)
+    if (filePath && isSoftProtected(filePath) && (iterationCount ?? 0) === 0) {
+        return true;
+    }
+
+    // Any protected file is unlocked when QA errors reference it
     if (!errorLogs) return false;
     const lower = errorLogs.toLowerCase();
     return (
