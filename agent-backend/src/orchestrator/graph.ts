@@ -18,7 +18,7 @@ import { generateDesignSystem, generateDesignTokenBlock } from './designSystem';
 import { distillInspiration, InspirationBriefMap } from './inspirationDistiller';
 import { parseSpecComponents } from './specParser';
 import { z } from 'zod';
-dotenv.config();
+dotenv.config(); //d
 setMaxListeners(50);
 
 // Mock implementation of Tool calling via literal execution.
